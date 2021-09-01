@@ -312,15 +312,15 @@ step_sum(struct sql_context *ctx, int argc, struct Mem **argv)
 {
 	assert(argc == 1);
 	(void)argc;
-	struct Mem *sum = ctx->pMem;
-	assert(sum->type == MEM_TYPE_NULL || mem_is_num(sum));
+	assert(argv[0]->type == MEM_TYPE_NULL || mem_is_num(argv[0]));
+	assert(ctx->pMem->type == MEM_TYPE_NULL || mem_is_num(ctx->pMem));
 	if (ctx->count == 0)
-		mem_set_null(sum);
+		mem_set_null(ctx->pMem);
 	if (argv[0]->type == MEM_TYPE_NULL)
 		return;
-	if (sum->type == MEM_TYPE_NULL)
-		return mem_copy_as_ephemeral(sum, argv[0]);
-	if (mem_add(sum, argv[0], sum) != 0)
+	if (ctx->pMem->type == MEM_TYPE_NULL)
+		return mem_copy_as_ephemeral(ctx->pMem, argv[0]);
+	if (mem_add(ctx->pMem, argv[0], ctx->pMem) != 0)
 		ctx->is_aborted = true;
 }
 
