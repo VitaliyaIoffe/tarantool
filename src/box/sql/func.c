@@ -436,6 +436,19 @@ func_round_dec(struct sql_context *ctx, int argc, struct Mem **argv)
 	mem_set_dec(ctx->pOut, &dec);
 }
 
+/** Implementation of the zeroblob() function. */
+static void
+func_zeroblob(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1);
+	(void)argc;
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return mem_set_null(ctx->pOut);
+	assert(mem_is_int(argv[0]));
+	uint64_t len = argv[0]->type == MEM_TYPE_UINT ? argv[0]->u.u : 0;
+	mem_set_zerobin(ctx->pOut, len);
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -1189,25 +1202,6 @@ charFunc(sql_context * context, int argc, sql_value ** argv)
 		}
 	}
 	sql_result_text64(context, (char *)z, zOut - z, sql_free);
-}
-
-/*
- * The zeroblob(N) function returns a zero-filled blob of size N bytes.
- */
-static void
-zeroblobFunc(sql_context * context, int argc, sql_value ** argv)
-{
-	int64_t n;
-	assert(argc == 1);
-	UNUSED_PARAMETER(argc);
-	n = mem_get_int_unsafe(argv[0]);
-	if (n < 0)
-		n = 0;
-	if (sql_result_zeroblob64(context, n) != 0) {
-		diag_set(ClientError, ER_SQL_EXECUTE, "string or binary string"\
-			 "is too big");
-		context->is_aborted = true;
-	}
 }
 
 /*
@@ -2039,7 +2033,7 @@ static struct sql_func_definition definitions[] = {
 	{"UUID", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_UUID, func_uuid, NULL},
 	{"VERSION", 0, {}, FIELD_TYPE_STRING, sql_func_version, NULL},
 	{"ZEROBLOB", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_VARBINARY,
-	 zeroblobFunc, NULL},
+	 func_zeroblob, NULL},
 };
 
 static struct sql_func_dictionary *
