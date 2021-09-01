@@ -395,6 +395,47 @@ func_uuid(struct sql_context *ctx, int argc, struct Mem **argv)
 	mem_set_uuid(ctx->pOut, &uuid);
 }
 
+static void
+func_round_int(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1 || argc == 2);
+	if (mem_is_null(argv[0]) || (argc == 2 && mem_is_null(argv[1])))
+		return mem_set_null(ctx->pOut);
+	assert(mem_is_int(argv[0]) && (argc == 1 || mem_is_int(argv[1])));
+	mem_copy_as_ephemeral(ctx->pOut, argv[0]);
+}
+
+static void
+func_round_double(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1 || argc == 2);
+	if (mem_is_null(argv[0]) || (argc == 2 && mem_is_null(argv[1])))
+		return mem_set_null(ctx->pOut);
+	assert(mem_is_double(argv[0]) && (argc == 1 || mem_is_int(argv[1])));
+
+	uint64_t scale = argc == 2 && mem_is_uint(argv[1]) ? argv[1]->u.u : 0;
+	mem_set_double(ctx->pOut, double_round(argv[0]->u.r, scale));
+}
+
+static void
+func_round_dec(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1 || argc == 2);
+	if (mem_is_null(argv[0]) || (argc == 2 && mem_is_null(argv[1])))
+		return mem_set_null(ctx->pOut);
+	assert(mem_is_dec(argv[0]) && (argc == 1 || mem_is_int(argv[1])));
+
+	uint64_t scale = argc == 2 && mem_is_uint(argv[1]) ? argv[1]->u.u : 0;
+	decimal_t dec = argv[0]->u.d;
+	if (decimal_round(&dec, scale) == NULL) {
+		diag_set(ClientError, ER_SQL_EXECUTE,
+			 "Cannot round decimal value");
+		ctx->is_aborted = true;
+		return;
+	}
+	mem_set_dec(ctx->pOut, &dec);
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -613,51 +654,6 @@ printfFunc(sql_context * context, int argc, sql_value ** argv)
 		sql_result_text(context, sqlStrAccumFinish(&str), n,
 				    SQL_DYNAMIC);
 	}
-}
-
-/*
- * Implementation of the round() function
- */
-static void
-roundFunc(sql_context * context, int argc, sql_value ** argv)
-{
-	int64_t n = 0;
-	double r;
-	if (argc != 1 && argc != 2) {
-		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "ROUND",
-			 "1 or 2", argc);
-		context->is_aborted = true;
-		return;
-	}
-	if (argc == 2) {
-		if (mem_is_null(argv[1]))
-			return;
-		n = mem_get_int_unsafe(argv[1]);
-		if (n < 0)
-			n = 0;
-	}
-	if (mem_is_null(argv[0]))
-		return;
-	if (!mem_is_num(argv[0]) && !mem_is_str(argv[0])) {
-		diag_set(ClientError, ER_SQL_TYPE_MISMATCH,
-			 mem_str(argv[0]), "number");
-		context->is_aborted = true;
-		return;
-	}
-	r = mem_get_double_unsafe(argv[0]);
-	/* If Y==0 and X will fit in a 64-bit int,
-	 * handle the rounding directly,
-	 * otherwise use printf.
-	 */
-	if (n == 0 && r >= 0 && r < (double)(LARGEST_INT64 - 1)) {
-		r = (double)((sql_int64) (r + 0.5));
-	} else if (n == 0 && r < 0 && (-r) < (double)(LARGEST_INT64 - 1)) {
-		r = -(double)((sql_int64) ((-r) + 0.5));
-	} else {
-		const char *rounded_value = tt_sprintf("%.*f", n, r);
-		sqlAtoF(rounded_value, &r, sqlStrlen30(rounded_value));
-	}
-	sql_result_double(context, r);
 }
 
 /*
@@ -1991,9 +1987,18 @@ static struct sql_func_definition definitions[] = {
 	{"REPLACE", 3,
 	 {FIELD_TYPE_VARBINARY, FIELD_TYPE_VARBINARY, FIELD_TYPE_VARBINARY},
 	 FIELD_TYPE_VARBINARY, replaceFunc, NULL},
-	{"ROUND", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, roundFunc, NULL},
+	{"ROUND", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, func_round_double,
+	 NULL},
 	{"ROUND", 2, {FIELD_TYPE_DOUBLE, FIELD_TYPE_INTEGER}, FIELD_TYPE_DOUBLE,
-	 roundFunc, NULL},
+	 func_round_double, NULL},
+	{"ROUND", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, func_round_int,
+	 NULL},
+	{"ROUND", 2, {FIELD_TYPE_INTEGER, FIELD_TYPE_INTEGER},
+	 FIELD_TYPE_INTEGER, func_round_int, NULL},
+	{"ROUND", 1, {FIELD_TYPE_DECIMAL}, FIELD_TYPE_DECIMAL, func_round_dec,
+	 NULL},
+	{"ROUND", 2, {FIELD_TYPE_DECIMAL, FIELD_TYPE_INTEGER},
+	 FIELD_TYPE_DECIMAL, func_round_dec, NULL},
 	{"ROW_COUNT", 0, {}, FIELD_TYPE_INTEGER, sql_row_count, NULL},
 	{"SOUNDEX", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_STRING, soundexFunc,
 	 NULL},

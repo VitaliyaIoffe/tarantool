@@ -47,6 +47,7 @@
 #include <msgpuck/msgpuck.h> /* mp_char2escape[] table */
 
 #include "say.h"
+#include "tt_static.h"
 
 /** Find a string in an array of strings.
  *
@@ -446,6 +447,23 @@ double_compare_nint64(double lhs, int64_t rhs, int k)
 		return k*COMPARE_RESULT(lhs, (double)rhs);
 	}
 	return -k;
+}
+
+double
+double_round(double value, uint64_t scale)
+{
+	if (scale == 0) {
+		/*
+		 * We do not need to round values greater than 2^53 or less than
+		 * -2^53.
+		 */
+		if (value > EXP2_53 || value < -EXP2_53)
+			return value;
+		if (value > 0)
+			return (double)(int64_t)(value + 0.5);
+		return (double)(int64_t)(value - 0.5);
+	}
+	return atof(tt_sprintf("%.*f", scale, value));
 }
 
 void

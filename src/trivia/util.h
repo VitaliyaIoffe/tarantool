@@ -553,6 +553,9 @@ double_compare_int64(double lhs, int64_t rhs, int k)
 	return double_compare_nint64(lhs, rhs, k);
 }
 
+double
+double_round(double value, uint64_t scale);
+
 /**
  * Compare two operands as int64_t.
  * Needed for qsort.
