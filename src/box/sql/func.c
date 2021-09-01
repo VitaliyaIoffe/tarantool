@@ -367,6 +367,18 @@ fin_count(struct sql_context *ctx)
 	mem_copy_as_ephemeral(ctx->pOut, ctx->pMem);
 }
 
+/** Implementation of the RANDOM() function. */
+static void
+func_random(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 0);
+	(void)argc;
+	(void)argv;
+	int64_t i;
+	sql_randomness(sizeof(i), &i);
+	mem_set_int(ctx->pOut, i, i < 0);
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -685,18 +697,6 @@ contextMalloc(sql_context * context, i64 nByte)
 			context->is_aborted = true;
 	}
 	return z;
-}
-
-/*
- * Implementation of random().  Return a random integer.
- */
-static void
-randomFunc(sql_context * context, int NotUsed, sql_value ** NotUsed2)
-{
-	int64_t r;
-	UNUSED_PARAMETER2(NotUsed, NotUsed2);
-	sql_randomness(sizeof(r), &r);
-	sql_result_int(context, r);
 }
 
 /*
@@ -1995,7 +1995,7 @@ static struct sql_func_definition definitions[] = {
 	{"PRINTF", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_STRING, printfFunc, 
 	 NULL},
 	{"QUOTE", 1, {FIELD_TYPE_ANY}, FIELD_TYPE_STRING, quoteFunc, NULL},
-	{"RANDOM", 0, {}, FIELD_TYPE_INTEGER, randomFunc, NULL},
+	{"RANDOM", 0, {}, FIELD_TYPE_INTEGER, func_random, NULL},
 	{"RANDOMBLOB", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_VARBINARY,
 	 randomBlob, NULL},
 	{"REPLACE", 3,
