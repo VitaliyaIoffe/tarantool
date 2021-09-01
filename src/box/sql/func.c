@@ -347,8 +347,6 @@ static void
 step_count(struct sql_context *ctx, int argc, struct Mem **argv)
 {
 	assert(argc == 0 || argc == 1);
-	(void)argc;
-	(void)argv;
 	if (ctx->count == 0 || ctx->pMem->type == MEM_TYPE_NULL)
 		mem_set_uint(ctx->pMem, 0);
 	assert(ctx->pMem->type == MEM_TYPE_UINT);
@@ -379,6 +377,24 @@ func_random(struct sql_context *ctx, int argc, struct Mem **argv)
 	mem_set_int(ctx->pOut, i, i < 0);
 }
 
+static void
+func_uuid(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 0 || argc == 1);
+	if (argc == 1) {
+		assert(mem_is_int(argv[0]));
+		if (argv[0]->type == MEM_TYPE_INT || argv[0]->u.u != 4) {
+			diag_set(ClientError, ER_UNSUPPORTED, "Function UUID",
+				 "versions other than 4");
+			ctx->is_aborted = true;
+			return;
+		}
+	}
+	struct tt_uuid uuid;
+	tt_uuid_create(&uuid);
+	mem_set_uuid(ctx->pOut, &uuid);
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -395,35 +411,6 @@ mem_as_bin(struct Mem *mem)
 	if (mem_get_bin(mem, &s) != 0)
 		return NULL;
 	return s;
-}
-
-static void
-sql_func_uuid(struct sql_context *ctx, int argc, struct Mem **argv)
-{
-	if (argc > 1) {
-		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT, "UUID",
-			 "one or zero", argc);
-		ctx->is_aborted = true;
-		return;
-	}
-	if (argc == 1) {
-		uint64_t version;
-		if (mem_get_uint(argv[0], &version) != 0) {
-			diag_set(ClientError, ER_SQL_TYPE_MISMATCH,
-				 mem_str(argv[0]), "integer");
-			ctx->is_aborted = true;
-			return;
-		}
-		if (version != 4) {
-			diag_set(ClientError, ER_UNSUPPORTED, "Function UUID",
-				 "versions other than 4");
-			ctx->is_aborted = true;
-			return;
-		}
-	}
-	struct tt_uuid uuid;
-	tt_uuid_create(&uuid);
-	mem_set_uuid(ctx->pOut, &uuid);
 }
 
 /*
@@ -2043,8 +2030,8 @@ static struct sql_func_definition definitions[] = {
 	 NULL},
 	{"UPPER", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_STRING, func_lower_upper,
 	 NULL},
-	{"UUID", 0, {}, FIELD_TYPE_UUID, sql_func_uuid, NULL},
-	{"UUID", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_UUID, sql_func_uuid, NULL},
+	{"UUID", 0, {}, FIELD_TYPE_UUID, func_uuid, NULL},
+	{"UUID", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_UUID, func_uuid, NULL},
 	{"VERSION", 0, {}, FIELD_TYPE_STRING, sql_func_version, NULL},
 	{"ZEROBLOB", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_VARBINARY,
 	 zeroblobFunc, NULL},
