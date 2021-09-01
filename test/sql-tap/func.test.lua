@@ -878,7 +878,7 @@ test:do_execsql_test(
                length(randomblob(2000))
     ]], {
         -- <func-9.5>
-        32, "", 2000
+        32, 0, 2000
         -- </func-9.5>
     })
 
@@ -2546,7 +2546,7 @@ test:do_execsql_test(
 test:do_execsql_test(
     "func-36",
     [[VALUES (LENGTH(RANDOMBLOB(0)))]],
-    {""})
+    {0})
 
 -- gh-3542
 -- In SQL '\0' is NOT a end-of-string signal. Tests below ensures

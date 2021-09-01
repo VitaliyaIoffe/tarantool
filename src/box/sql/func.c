@@ -449,6 +449,23 @@ func_zeroblob(struct sql_context *ctx, int argc, struct Mem **argv)
 	mem_set_zerobin(ctx->pOut, len);
 }
 
+/** Implementation of the randomblob() function. */
+static void
+func_randomblob(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1);
+	(void)argc;
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return mem_set_null(ctx->pOut);
+	assert(mem_is_int(argv[0]));
+	uint64_t len = argv[0]->type == MEM_TYPE_UINT ? argv[0]->u.u : 0;
+	if (len == 0)
+		return mem_set_bin_static(ctx->pOut, "", 0);
+	char *buf = sqlDbMallocRawNN(sql_get(), len);
+	sql_randomness(len, buf);
+	mem_set_bin_allocated(ctx->pOut, buf, len);
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -693,34 +710,6 @@ contextMalloc(sql_context * context, i64 nByte)
 			context->is_aborted = true;
 	}
 	return z;
-}
-
-/*
- * Implementation of randomblob(N).  Return a random blob
- * that is N bytes long.
- */
-static void
-randomBlob(sql_context * context, int argc, sql_value ** argv)
-{
-	int64_t n;
-	unsigned char *p;
-	assert(argc == 1);
-	UNUSED_PARAMETER(argc);
-	if (mem_is_bin(argv[0]) || mem_is_map(argv[0]) ||
-	    mem_is_array(argv[0])) {
-		diag_set(ClientError, ER_SQL_TYPE_MISMATCH,
-			 mem_str(argv[0]), "number");
-		context->is_aborted = true;
-		return;
-	}
-	n = mem_get_int_unsafe(argv[0]);
-	if (n < 1)
-		return;
-	p = contextMalloc(context, n);
-	if (p) {
-		sql_randomness(n, p);
-		sql_result_blob(context, (char *)p, n, sql_free);
-	}
 }
 
 #define Utf8Read(s, e) \
@@ -1974,7 +1963,7 @@ static struct sql_func_definition definitions[] = {
 	{"QUOTE", 1, {FIELD_TYPE_ANY}, FIELD_TYPE_STRING, quoteFunc, NULL},
 	{"RANDOM", 0, {}, FIELD_TYPE_INTEGER, func_random, NULL},
 	{"RANDOMBLOB", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_VARBINARY,
-	 randomBlob, NULL},
+	 func_randomblob, NULL},
 	{"REPLACE", 3,
 	 {FIELD_TYPE_STRING, FIELD_TYPE_STRING, FIELD_TYPE_STRING},
 	 FIELD_TYPE_STRING, replaceFunc, NULL},
