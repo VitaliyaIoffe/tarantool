@@ -302,8 +302,8 @@ SELECT quote(a) FROM t0;
  |   rows:
  |   - ['FALSE']
  |   - ['TRUE']
- |   - ['NULL']
- |   - ['NULL']
+ |   - [null]
+ |   - [null]
  | ...
 -- gh-4462: LENGTH didn't take BOOLEAN arguments.
 SELECT length(a) FROM t0;
