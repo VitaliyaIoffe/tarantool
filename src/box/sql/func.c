@@ -466,6 +466,18 @@ func_randomblob(struct sql_context *ctx, int argc, struct Mem **argv)
 	mem_set_bin_allocated(ctx->pOut, buf, len);
 }
 
+/** Implementation of the quote() function. */
+static void
+func_quote_num(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1);
+	(void)argc;
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return mem_set_null(ctx->pOut);
+	assert(mem_is_num(argv[0]));
+	mem_copy_as_ephemeral(ctx->pOut, argv[0]);
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -1959,6 +1971,8 @@ static struct sql_func_definition definitions[] = {
 	{"POSITION", 2, {FIELD_TYPE_STRING, FIELD_TYPE_STRING},
 	 FIELD_TYPE_INTEGER, position_func, NULL},
 	{"PRINTF", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_STRING, printfFunc, 
+	 NULL},
+	{"QUOTE", 1, {FIELD_TYPE_NUMBER}, FIELD_TYPE_STRING, func_quote_num,
 	 NULL},
 	{"QUOTE", 1, {FIELD_TYPE_ANY}, FIELD_TYPE_STRING, quoteFunc, NULL},
 	{"RANDOM", 0, {}, FIELD_TYPE_INTEGER, func_random, NULL},
