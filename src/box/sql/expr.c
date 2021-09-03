@@ -3937,7 +3937,7 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 					 tt_sprintf(err, pExpr->u.zToken));
 				pParse->is_aborted = true;
 			} else {
-				return pInfo->aFunc[pExpr->iAgg].iMem;
+				return pInfo->aFunc[pExpr->iAgg].acc1;
 			}
 			break;
 		}
@@ -4102,14 +4102,17 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 				pParse->is_aborted = true;
 				return 0;
 			}
-			if (sql_func_flag_is_set(func, SQL_FUNC_NEEDCOLL)) {
-				sqlVdbeAddOp4(v, OP_CollSeq, 0, 0, 0,
-						  (char *)coll, P4_COLLSEQ);
-			}
+
 			if (func->def->language == FUNC_LANGUAGE_SQL_BUILTIN) {
-				sqlVdbeAddOp4(v, OP_BuiltinFunction0, constMask,
-					      r1, target, (char *)func,
-					      P4_FUNC);
+				struct sql_context *ctx =
+					sql_context_new(v, func, nFarg, coll);
+				if (ctx == NULL) {
+					pParse->is_aborted = true;
+					return 0;
+				}
+				sqlVdbeAddOp4(v, OP_BuiltinFunction, constMask,
+					      r1, target, (char *)ctx,
+					      P4_FUNCCTX);
 			} else {
 				sqlVdbeAddOp4(v, OP_FunctionByName, constMask,
 					      r1, target,
@@ -4117,8 +4120,8 @@ sqlExprCodeTarget(Parse * pParse, Expr * pExpr, int target)
 							   func->def->name,
 							   func->def->name_len),
 					      P4_DYNAMIC);
+				sqlVdbeChangeP5(v, (u8) nFarg);
 			}
-			sqlVdbeChangeP5(v, (u8) nFarg);
 			if (nFarg && constMask == 0) {
 				sqlReleaseTempRange(pParse, r1, nFarg);
 			}
@@ -5415,7 +5418,8 @@ analyzeAggregate(Walker * pWalker, Expr * pExpr)
 						       (pExpr, EP_xIsSelect));
 						pItem = &pAggInfo->aFunc[i];
 						pItem->pExpr = pExpr;
-						pItem->iMem = ++pParse->nMem;
+						pItem->acc1 = ++pParse->nMem;
+						pItem->acc2 = ++pParse->nMem;
 						assert(!ExprHasProperty
 						       (pExpr, EP_IntValue));
 						pItem->func =

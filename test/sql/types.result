@@ -775,11 +775,8 @@ box.execute("SELECT avg(i) FROM t;")
 ...
 box.execute("SELECT total(i) FROM t;")
 ---
-- metadata:
-  - name: COLUMN_1
-    type: double
-  rows:
-  - [1.844674407371e+19]
+- null
+- 'Type mismatch: can not convert integer(18446744073709551613) to double'
 ...
 box.execute("SELECT min(i) FROM t;")
 ---

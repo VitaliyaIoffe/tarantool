@@ -54,7 +54,6 @@ enum mem_type {
 	MEM_TYPE_INVALID	= 1 << 11,
 	MEM_TYPE_FRAME		= 1 << 12,
 	MEM_TYPE_PTR		= 1 << 13,
-	MEM_TYPE_AGG		= 1 << 14,
 };
 
 /*
@@ -185,12 +184,6 @@ static inline bool
 mem_is_array(const struct Mem *mem)
 {
 	return mem->type == MEM_TYPE_ARRAY;
-}
-
-static inline bool
-mem_is_agg(const struct Mem *mem)
-{
-	return mem->type == MEM_TYPE_AGG;
 }
 
 static inline bool
@@ -434,6 +427,13 @@ mem_copy_strl(struct Mem *mem, const char *value, int len_hint)
 	return mem_copy_str(mem, value, len_hint);
 }
 
+static inline void
+mem_inc_uint(struct Mem *mem)
+{
+	assert(mem->type == MEM_TYPE_UINT && mem->u.u < UINT64_MAX);
+	++mem->u.u;
+}
+
 /**
  * Clear MEM and set it to VARBINARY. The binary value belongs to another
  * object.
@@ -563,13 +563,6 @@ mem_set_ptr(struct Mem *mem, void *ptr);
 /** Clear MEM and set frame to be its value. */
 void
 mem_set_frame(struct Mem *mem, struct VdbeFrame *frame);
-
-/**
- * Clear the MEM, set the function as its value, and allocate enough memory to
- * hold the accumulation structure for the aggregate function.
- */
-int
-mem_set_agg(struct Mem *mem, struct func *func, int size);
 
 /** Clear MEM and set it to special, "cleared", NULL. */
 void
@@ -901,13 +894,6 @@ mem_len_unsafe(const struct Mem *mem)
 }
 
 /**
- * Return address of memory allocated for accumulation structure of the
- * aggregate function.
- */
-int
-mem_get_agg(const struct Mem *mem, void **accum);
-
-/**
  * Simple type to str convertor. It is used to simplify
  * error reporting.
  */
@@ -962,19 +948,7 @@ int sqlVdbeMemTooBig(Mem *);
  * that needs to be deallocated to avoid a leak.
  */
 #define VdbeMemDynamic(X) (((X)->flags & MEM_Dyn) != 0 ||\
-			   ((X)->type & (MEM_TYPE_AGG | MEM_TYPE_FRAME)) != 0)
-
-/** MEM manipulate functions. */
-
-/**
- * Memory cell mem contains the context of an aggregate function.
- * This routine calls the finalize method for that function. The
- * result of the aggregate is stored back into mem.
- *
- * Returns -1 if the finalizer reports an error. 0 otherwise.
- */
-int
-sql_vdbemem_finalize(struct Mem *mem, struct func *func);
+			   ((X)->type & MEM_TYPE_FRAME) != 0)
 
 /**
  * Perform comparison of two tuples: unpacked (key1) and packed (key2)

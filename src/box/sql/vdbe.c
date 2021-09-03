@@ -1175,71 +1175,27 @@ case OP_Remainder: {           /* same as TK_REM, in1, in2, out3 */
  * publicly.  Only built-in functions have access to this feature.
  */
 case OP_CollSeq: {
-	assert(pOp->p4type==P4_COLLSEQ || pOp->p4.pColl == NULL);
 	if (pOp->p1) {
 		mem_set_bool(&aMem[pOp->p1], false);
 	}
 	break;
 }
 
-/* Opcode: BuiltinFunction0 P1 P2 P3 P4 P5
- * Synopsis: r[P3]=func(r[P2@P5])
- *
- * Invoke a user function (P4 is a pointer to a FuncDef object that
- * defines the function) with P5 arguments taken from register P2 and
- * successors.  The result of the function is stored in register P3.
- * Register P3 must not be one of the function inputs.
- *
- * P1 is a 32-bit bitmask indicating whether or not each argument to the
- * function was determined to be constant at compile time. If the first
- * argument was constant then bit 0 of P1 is set.
- *
- * See also: BuiltinFunction, AggStep, AggFinal
- */
-/* Opcode: BuiltinFunction P1 P2 P3 P4 P5
- * Synopsis: r[P3]=func(r[P2@P5])
+/* Opcode: BuiltinFunction P1 P2 P3 P4 *
+ * Synopsis: r[P3]=func(r[P2@argc])
  *
  * Invoke a user function (P4 is a pointer to an sql_context object that
- * contains a pointer to the function to be run) with P5 arguments taken
- * from register P2 and successors.  The result of the function is stored
- * in register P3.  Register P3 must not be one of the function inputs.
+ * contains a pointer to the function to be run) with argc arguments taken
+ * from register P2 and successors. The argc value is received from context. The
+ * result of the function is stored in register P3.  Register P3 must not be one
+ * of the function inputs.
  *
  * P1 is a 32-bit bitmask indicating whether or not each argument to the
  * function was determined to be constant at compile time. If the first
  * argument was constant then bit 0 of P1 is set.
  *
- * SQL functions are initially coded as OP_BuiltinFunction0 with
- * P4 pointing to a FuncDef object.  But on first evaluation,
- * the P4 operand is automatically converted into an sql_context
- * object and the operation changed to this OP_BuiltinFunction
- * opcode.  In this way, the initialization of the sql_context
- * object occurs only once, rather than once for each evaluation
- * of the function.
- *
- * See also: BuiltinFunction0, AggStep, AggFinal
+ * See also: AggStep, AggFinal
  */
-case OP_BuiltinFunction0: {
-	int n;
-	sql_context *pCtx;
-
-	assert(pOp->p4type == P4_FUNC);
-	n = pOp->p5;
-	assert(pOp->p3>0 && pOp->p3<=(p->nMem+1 - p->nCursor));
-	assert(n==0 || (pOp->p2>0 && pOp->p2+n<=(p->nMem+1 - p->nCursor)+1));
-	assert(pOp->p3<pOp->p2 || pOp->p3>=pOp->p2+n);
-	pCtx = sqlDbMallocRawNN(db, sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
-	if (pCtx==0) goto no_mem;
-	pCtx->pOut = 0;
-	pCtx->func = pOp->p4.func;
-	pCtx->iOp = (int)(pOp - aOp);
-	pCtx->pVdbe = p;
-	pCtx->argc = n;
-	pOp->p4type = P4_FUNCCTX;
-	pOp->p4.pCtx = pCtx;
-	pOp->opcode = OP_BuiltinFunction;
-	/* Fall through into OP_BuiltinFunction */
-	FALLTHROUGH;
-}
 case OP_BuiltinFunction: {
 	int i;
 	sql_context *pCtx;
@@ -4184,74 +4140,32 @@ case OP_DecrJumpZero: {      /* jump, in1 */
 	break;
 }
 
-
-/* Opcode: AggStep0 * P2 P3 P4 P5
- * Synopsis: accum=r[P3] step(r[P2@P5])
+/* Opcode: AggStep * P2 P3 P4 *
+ * Synopsis: accum=r[P3] step(r[P2@argc])
  *
- * Execute the step function for an aggregate.  The
- * function has P5 arguments.   P4 is a pointer to the FuncDef
- * structure that specifies the function.  Register P3 is the
- * accumulator.
- *
- * The P5 arguments are taken from register P2 and its
- * successors.
- */
-/* Opcode: AggStep * P2 P3 P4 P5
- * Synopsis: accum=r[P3] step(r[P2@P5])
- *
- * Execute the step function for an aggregate.  The
- * function has P5 arguments.   P4 is a pointer to an sql_context
+ * Execute the step function for an aggregate.  The function has argc arguments.
+ * Value of argc is described in sql_context. P4 is a pointer to an sql_context
  * object that is used to run the function.  Register P3 is
  * as the accumulator.
  *
  * The P5 arguments are taken from register P2 and its
  * successors.
- *
- * This opcode is initially coded as OP_AggStep0.  On first evaluation,
- * the FuncDef stored in P4 is converted into an sql_context and
- * the opcode is changed.  In this way, the initialization of the
- * sql_context only happens once, instead of on each call to the
- * step function.
  */
-case OP_AggStep0: {
-	int n;
-	sql_context *pCtx;
-
-	assert(pOp->p4type == P4_FUNC);
-	n = pOp->p5;
-	assert(pOp->p3>0 && pOp->p3<=(p->nMem+1 - p->nCursor));
-	assert(n==0 || (pOp->p2>0 && pOp->p2+n<=(p->nMem+1 - p->nCursor)+1));
-	assert(pOp->p3<pOp->p2 || pOp->p3>=pOp->p2+n);
-	pCtx = sqlDbMallocRawNN(db, sizeof(*pCtx) + (n-1)*sizeof(sql_value*));
-	if (pCtx==0) goto no_mem;
-	pCtx->pMem = 0;
-	pCtx->func = pOp->p4.func;
-	pCtx->iOp = (int)(pOp - aOp);
-	pCtx->pVdbe = p;
-	pCtx->argc = n;
-	pOp->p4type = P4_FUNCCTX;
-	pOp->p4.pCtx = pCtx;
-	pOp->opcode = OP_AggStep;
-	/* Fall through into OP_AggStep */
-	FALLTHROUGH;
-}
 case OP_AggStep: {
 	int i;
 	sql_context *pCtx;
-	Mem *pMem;
-	Mem t;
 
 	assert(pOp->p4type==P4_FUNCCTX);
 	pCtx = pOp->p4.pCtx;
-	pMem = &aMem[pOp->p3];
 
 	/* If this function is inside of a trigger, the register array in aMem[]
 	 * might change from one evaluation to the next.  The next block of code
 	 * checks to see if the register array has changed, and if so it
 	 * reinitializes the relavant parts of the sql_context object
 	 */
-	if (pCtx->pMem != pMem) {
-		pCtx->pMem = pMem;
+	if (pCtx->pOut != &aMem[pOp->p1]) {
+		pCtx->pOut = &aMem[pOp->p1];
+		pCtx->pMem = pOp->p3 > 0 ? &aMem[pOp->p3] : NULL;
 		for(i=pCtx->argc-1; i>=0; i--) pCtx->argv[i] = &aMem[pOp->p2+i];
 	}
 
@@ -4262,19 +4176,13 @@ case OP_AggStep: {
 	}
 #endif
 
-	pMem->n++;
-	mem_create(&t);
-	pCtx->pOut = &t;
 	pCtx->is_aborted = false;
 	pCtx->skipFlag = 0;
 	assert(pCtx->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
 	struct func_sql_builtin *func = (struct func_sql_builtin *)pCtx->func;
 	func->call(pCtx, pCtx->argc, pCtx->argv);
-	if (pCtx->is_aborted) {
-		mem_destroy(&t);
+	if (pCtx->is_aborted)
 		goto abort_due_to_error;
-	}
-	assert(mem_is_null(&t));
 	if (pCtx->skipFlag) {
 		assert(pOp[-1].opcode==OP_CollSeq);
 		i = pOp[-1].p1;
@@ -4297,16 +4205,21 @@ case OP_AggStep: {
  * the step function was not previously called.
  */
 case OP_AggFinal: {
-	Mem *pMem;
 	assert(pOp->p1>0 && pOp->p1<=(p->nMem+1 - p->nCursor));
-	pMem = &aMem[pOp->p1];
-	assert(mem_is_null(pMem) || mem_is_agg(pMem));
-	if (sql_vdbemem_finalize(pMem, pOp->p4.func) != 0)
+	struct func_sql_builtin *func =
+		((struct func_sql_builtin *)pOp->p4.func);
+	if (func->finalize == NULL)
+		break;
+	struct sql_context ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.pOut = &aMem[pOp->p1];
+	ctx.pMem = pOp->p3 > 0 ? &aMem[pOp->p3] : NULL;
+	func->finalize(&ctx);
+	if (ctx.is_aborted)
 		goto abort_due_to_error;
-	UPDATE_MAX_BLOBSIZE(pMem);
-	if (sqlVdbeMemTooBig(pMem)) {
+	UPDATE_MAX_BLOBSIZE(ctx.pOut);
+	if (sqlVdbeMemTooBig(ctx.pOut))
 		goto too_big;
-	}
 	break;
 }
 

@@ -329,6 +329,7 @@ struct sql_vfs {
 #define SQL_LIMIT_TRIGGER_DEPTH             9
 
 struct tt_uuid;
+struct sql_context;
 
 enum sql_ret_code {
 	/** sql_step() has another row ready. */
@@ -483,18 +484,6 @@ sql_randomness(int N, void *P);
 void
 sql_row_count(struct sql_context *context, MAYBE_UNUSED int unused1,
 	      MAYBE_UNUSED sql_value **unused2);
-
-void *
-sql_aggregate_context(sql_context *,
-			  int nBytes);
-
-/**
- * Allocate or return the aggregate context containing struct MEM for a user
- * function. A new context is allocated on the first call. Subsequent calls
- * return the same context that was returned on prior calls.
- */
-struct Mem *
-sql_context_agg_mem(struct sql_context *context);
 
 int
 sql_column_count(sql_stmt * pStmt);
@@ -1406,7 +1395,8 @@ struct AggInfo {
 		Expr *pExpr;	/* Expression encoding the function */
 		/** The aggregate function implementation. */
 		struct func *func;
-		int iMem;	/* Memory location that acts as accumulator */
+		int acc1;
+		int acc2;
 		int iDistinct;	/* Ephemeral table used to enforce DISTINCT */
 		/**
 		 * Register, holding ephemeral's space pointer.
@@ -4140,6 +4130,10 @@ void sqlAppendChar(StrAccum *, int, char);
 char *sqlStrAccumFinish(StrAccum *);
 void sqlStrAccumReset(StrAccum *);
 void sqlSelectDestInit(SelectDest *, int, int, int);
+
+struct sql_context *
+sql_context_new(struct Vdbe *vdbe, struct func *func, uint32_t argc,
+		struct coll *coll);
 
 /*
  * Create an expression to load @a column from datasource

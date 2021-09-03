@@ -495,7 +495,7 @@ test:do_test(
         local res = {pcall(box.execute, [[SELECT TOTAL(?);]], {'1'})}
         return {tostring(res[3])}
     end, {
-        "Type mismatch: can not convert string('1') to integer"
+        "Type mismatch: can not convert string('1') to double"
     })
 
 --

@@ -53,6 +53,154 @@
 static struct mh_strnptr_t *built_in_functions = NULL;
 static struct func_sql_builtin **functions;
 
+/** Implementation of the COUNT() function. */
+static void
+step_count(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 0 || argc == 1);
+	if (ctx->pOut->type == MEM_TYPE_NULL)
+		mem_set_uint(ctx->pOut, 0);
+	if (argc == 1 && argv[0]->type == MEM_TYPE_NULL)
+		return;
+	assert(ctx->pOut->type == MEM_TYPE_UINT);
+	mem_inc_uint(ctx->pOut);
+}
+
+/** Finalizer for the COUNT() function. */
+static void
+fin_count(struct sql_context *ctx)
+{
+	assert(ctx->pOut->type == MEM_TYPE_NULL || mem_is_num(ctx->pOut));
+	if (ctx->pOut->type == MEM_TYPE_NULL)
+		return mem_set_uint(ctx->pOut, 0);
+}
+
+/** Implementation of the SUM() and TOTAL() functions. */
+static void
+step_sum(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1);
+	(void)argc;
+	assert(ctx->pOut->type == MEM_TYPE_NULL || mem_is_num(ctx->pOut));
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return;
+	if (ctx->pOut->type == MEM_TYPE_NULL)
+		return mem_copy_as_ephemeral(ctx->pOut, argv[0]);
+	if (mem_add(ctx->pOut, argv[0], ctx->pOut) != 0)
+		ctx->is_aborted = true;
+}
+
+/** Finalizer for the TOTAL() function. */
+static void
+fin_total(struct sql_context *ctx)
+{
+	assert(ctx->pOut->type == MEM_TYPE_NULL || mem_is_num(ctx->pOut));
+	if (ctx->pOut->type == MEM_TYPE_NULL)
+		return mem_set_double(ctx->pOut, 0.0);
+}
+
+/** Implementation of the AVG() function. */
+static void
+step_avg(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1);
+	(void)argc;
+	assert(ctx->pOut->type == MEM_TYPE_NULL || mem_is_num(ctx->pOut));
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return;
+	if (ctx->pOut->type == MEM_TYPE_NULL) {
+		mem_copy_as_ephemeral(ctx->pOut, argv[0]);
+		mem_set_uint(ctx->pMem, 1);
+		return;
+	}
+	mem_inc_uint(ctx->pMem);
+	if (mem_add(ctx->pOut, argv[0], ctx->pOut) != 0)
+		ctx->is_aborted = true;
+}
+
+/** Finalizer for the AVG() function. */
+static void
+fin_avg(struct sql_context *ctx)
+{
+	assert(ctx->pOut->type == MEM_TYPE_NULL || mem_is_num(ctx->pOut));
+	if (ctx->pOut->type == MEM_TYPE_NULL)
+		return;
+	if (mem_div(ctx->pOut, ctx->pMem, ctx->pOut) != 0)
+		ctx->is_aborted = true;
+}
+
+/** Implementation of the MIN() and MAX() functions. */
+static void
+step_minmax(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1);
+	(void)argc;
+	if (argv[0]->type == MEM_TYPE_NULL) {
+		if (ctx->pOut->type != MEM_TYPE_NULL)
+			ctx->skipFlag = 1;
+		return;
+	}
+	if (ctx->pOut->type == MEM_TYPE_NULL) {
+		if (mem_copy(ctx->pOut, argv[0]) != 0)
+			ctx->is_aborted = true;
+		return;
+	}
+
+	uint32_t flags = ((struct func_sql_builtin *)ctx->func)->flags;
+	bool is_max = (flags & SQL_FUNC_MAX) != 0;
+	/*
+	 * This step function is used for both the min() and max() aggregates,
+	 * the only difference between the two being that the sense of the
+	 * comparison is inverted.
+	 */
+	int cmp = mem_cmp_scalar(ctx->pOut, argv[0], ctx->coll);
+	if ((is_max && cmp < 0) || (!is_max && cmp > 0)) {
+		if (mem_copy(ctx->pOut, argv[0]) != 0)
+			ctx->is_aborted = true;
+		return;
+	}
+	ctx->skipFlag = 1;
+}
+
+/** Implementation of the GROUP_CONCAT() function. */
+static void
+step_group_concat(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1 || argc == 2);
+	(void)argc;
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return;
+	assert(mem_is_str(argv[0]) || mem_is_bin(argv[0]));
+	if (ctx->pOut->type == MEM_TYPE_NULL) {
+		if (mem_copy_str(ctx->pOut, argv[0]->z, argv[0]->n) != 0)
+			ctx->is_aborted = true;
+		return;
+	}
+	const char *sep = NULL;
+	int sep_len = 0;
+	if (argc == 1) {
+		sep = ",";
+		sep_len = 1;
+	} else if (argv[1]->type == MEM_TYPE_NULL) {
+		sep = "";
+		sep_len = 0;
+	} else {
+		assert(mem_is_same_type(argv[0], argv[0]));
+		sep = argv[1]->z;
+		sep_len = argv[1]->n;
+	}
+	if (sep_len > 0) {
+		if (mem_append(ctx->pOut, sep, sep_len) != 0) {
+			ctx->is_aborted = true;
+			return;
+		}
+	}
+	if (mem_append(ctx->pOut, argv[0]->z, argv[0]->n) != 0) {
+		ctx->is_aborted = true;
+		return;
+	}
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -101,30 +249,6 @@ sql_func_uuid(struct sql_context *ctx, int argc, struct Mem **argv)
 }
 
 /*
- * Return the collating function associated with a function.
- */
-static struct coll *
-sqlGetFuncCollSeq(sql_context * context)
-{
-	VdbeOp *pOp;
-	assert(context->pVdbe != 0);
-	pOp = &context->pVdbe->aOp[context->iOp - 1];
-	assert(pOp->opcode == OP_CollSeq);
-	assert(pOp->p4type == P4_COLLSEQ || pOp->p4.pColl == NULL);
-	return pOp->p4.pColl;
-}
-
-/*
- * Indicate that the accumulator load should be skipped on this
- * iteration of the aggregate loop.
- */
-static void
-sqlSkipAccumulatorLoad(sql_context * context)
-{
-	context->skipFlag = 1;
-}
-
-/*
  * Implementation of the non-aggregate min() and max() functions
  */
 static void
@@ -141,7 +265,7 @@ minmaxFunc(sql_context * context, int argc, sql_value ** argv)
 		context->is_aborted = true;
 		return;
 	}
-	pColl = sqlGetFuncCollSeq(context);
+	pColl = context->coll;
 	assert(mask == -1 || mask == 0);
 	iBest = 0;
 	if (mem_is_null(argv[0]))
@@ -402,7 +526,7 @@ position_func(struct sql_context *context, int argc, struct Mem **argv)
 					       n_haystack_bytes);
 			}
 			int beg_offset = 0;
-			struct coll *coll = sqlGetFuncCollSeq(context);
+			struct coll *coll = context->coll;
 			int c;
 			for (c = 0; c + n_needle_chars <= n_haystack_chars; c++) {
 				if (coll->cmp((const char *) haystack_str + beg_offset,
@@ -667,7 +791,7 @@ case_type##ICUFunc(sql_context *context, int argc, sql_value **argv)   \
 		return;                                                        \
 	}                                                                      \
 	UErrorCode status = U_ZERO_ERROR;                                      \
-	struct coll *coll = sqlGetFuncCollSeq(context);                    \
+	struct coll *coll = context->coll;                                     \
 	const char *locale = NULL;                                             \
 	if (coll != NULL && coll->type == COLL_TYPE_ICU) {                     \
 		locale = ucol_getLocaleByType(coll->collator,                  \
@@ -1029,7 +1153,7 @@ likeFunc(sql_context *context, int argc, sql_value **argv)
 	if (!zA || !zB)
 		return;
 	int res;
-	struct coll *coll = sqlGetFuncCollSeq(context);
+	struct coll *coll = context->coll;
 	assert(coll != NULL);
 	res = sql_utf8_pattern_compare(zB, zA, zB_end, zA_end, coll, escape);
 
@@ -1050,7 +1174,7 @@ likeFunc(sql_context *context, int argc, sql_value **argv)
 static void
 nullifFunc(sql_context * context, int NotUsed, sql_value ** argv)
 {
-	struct coll *pColl = sqlGetFuncCollSeq(context);
+	struct coll *pColl = context->coll;
 	UNUSED_PARAMETER(NotUsed);
 	if (mem_cmp_scalar(argv[0], argv[1], pColl) != 0)
 		sql_result_value(context, argv[0]);
@@ -1631,237 +1755,6 @@ struct SumCtx {
 	uint32_t count;
 };
 
-/*
- * Routines used to compute the sum, average, and total.
- *
- * The SUM() function follows the (broken) SQL standard which means
- * that it returns NULL if it sums over no inputs.  TOTAL returns
- * 0.0 in that case.  In addition, TOTAL always returns a float where
- * SUM might return an integer if it never encounters a floating point
- * value.  TOTAL never fails, but SUM might through an exception if
- * it overflows an integer.
- */
-static void
-sum_step(struct sql_context *context, int argc, sql_value **argv)
-{
-	assert(argc == 1);
-	UNUSED_PARAMETER(argc);
-	struct SumCtx *p = sql_aggregate_context(context, sizeof(*p));
-	if (p == NULL) {
-		context->is_aborted = true;
-		return;
-	}
-	if (p->count == 0) {
-		mem_create(&p->mem);
-		assert(context->func->def->returns == FIELD_TYPE_INTEGER ||
-		       context->func->def->returns == FIELD_TYPE_DOUBLE);
-		if (context->func->def->returns == FIELD_TYPE_INTEGER)
-			mem_set_uint(&p->mem, 0);
-		else
-			mem_set_double(&p->mem, 0.0);
-	}
-	if (argv[0]->type == MEM_TYPE_NULL)
-		return;
-	++p->count;
-	assert(mem_is_num(argv[0]));
-	if (mem_add(&p->mem, argv[0], &p->mem) != 0)
-		context->is_aborted = true;
-}
-
-static void
-sumFinalize(sql_context * context)
-{
-	SumCtx *p;
-	p = sql_aggregate_context(context, 0);
-	if (p == NULL || p->count == 0)
-		mem_set_null(context->pOut);
-	else
-		mem_copy_as_ephemeral(context->pOut, &p->mem);
-}
-
-static void
-avgFinalize(sql_context * context)
-{
-	SumCtx *p;
-	p = sql_aggregate_context(context, 0);
-	if (p == NULL || p->count == 0) {
-		mem_set_null(context->pOut);
-		return;
-	}
-	struct Mem mem;
-	mem_create(&mem);
-	mem_set_uint(&mem, p->count);
-	if (mem_div(&p->mem, &mem, context->pOut) != 0)
-		context->is_aborted = true;
-}
-
-static void
-totalFinalize(sql_context * context)
-{
-	SumCtx *p;
-	p = sql_aggregate_context(context, 0);
-	if (p == NULL || p->count == 0)
-		mem_set_double(context->pOut, 0.0);
-	else
-		mem_copy_as_ephemeral(context->pOut, &p->mem);
-}
-
-/*
- * The following structure keeps track of state information for the
- * count() aggregate function.
- */
-typedef struct CountCtx CountCtx;
-struct CountCtx {
-	i64 n;
-};
-
-/*
- * Routines to implement the count() aggregate function.
- */
-static void
-countStep(sql_context * context, int argc, sql_value ** argv)
-{
-	CountCtx *p;
-	if (argc != 0 && argc != 1) {
-		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT,
-			 "COUNT", "0 or 1", argc);
-		context->is_aborted = true;
-		return;
-	}
-	p = sql_aggregate_context(context, sizeof(*p));
-	if ((argc == 0 || !mem_is_null(argv[0])) && p != NULL)
-		p->n++;
-}
-
-static void
-countFinalize(sql_context * context)
-{
-	CountCtx *p;
-	p = sql_aggregate_context(context, 0);
-	sql_result_uint(context, p ? p->n : 0);
-}
-
-/*
- * Routines to implement min() and max() aggregate functions.
- */
-static void
-minmaxStep(sql_context * context, int NotUsed, sql_value ** argv)
-{
-	Mem *pArg = (Mem *) argv[0];
-	Mem *pBest;
-	UNUSED_PARAMETER(NotUsed);
-
-	struct func_sql_builtin *func =
-		(struct func_sql_builtin *)context->func;
-	pBest = sql_context_agg_mem(context);
-	if (!pBest)
-		return;
-
-	if (mem_is_null(argv[0])) {
-		if (!mem_is_null(pBest))
-			sqlSkipAccumulatorLoad(context);
-	} else if (!mem_is_null(pBest)) {
-		struct coll *pColl = sqlGetFuncCollSeq(context);
-		/*
-		 * This step function is used for both the min()
-		 * and max() aggregates, the only difference
-		 * between the two being that the sense of the
-		 * comparison is inverted.
-		 */
-		bool is_max = (func->flags & SQL_FUNC_MAX) != 0;
-		int cmp = mem_cmp_scalar(pBest, pArg, pColl);
-		if ((is_max && cmp < 0) || (!is_max && cmp > 0)) {
-			if (mem_copy(pBest, pArg) != 0)
-				context->is_aborted = true;
-		} else {
-			sqlSkipAccumulatorLoad(context);
-		}
-	} else {
-		pBest->db = sql_context_db_handle(context);
-		if (mem_copy(pBest, pArg) != 0)
-			context->is_aborted = true;
-	}
-}
-
-static void
-minMaxFinalize(sql_context * context)
-{
-	struct Mem *mem = context->pMem;
-	struct Mem *res;
-	if (mem_get_agg(mem, (void **)&res) != 0)
-		return;
-	if (!mem_is_null(res))
-		sql_result_value(context, res);
-	mem_destroy(res);
-}
-
-/*
- * group_concat(EXPR, ?SEPARATOR?)
- */
-static void
-groupConcatStep(sql_context * context, int argc, sql_value ** argv)
-{
-	const char *zVal;
-	StrAccum *pAccum;
-	const char *zSep;
-	int nVal, nSep;
-	if (argc != 1 && argc != 2) {
-		diag_set(ClientError, ER_FUNC_WRONG_ARG_COUNT,
-			 "GROUP_CONCAT", "1 or 2", argc);
-		context->is_aborted = true;
-		return;
-	}
-	if (mem_is_null(argv[0]))
-		return;
-	pAccum =
-	    (StrAccum *) sql_aggregate_context(context, sizeof(*pAccum));
-
-	if (pAccum) {
-		sql *db = sql_context_db_handle(context);
-		int firstTerm = pAccum->mxAlloc == 0;
-		pAccum->mxAlloc = db->aLimit[SQL_LIMIT_LENGTH];
-		if (!firstTerm) {
-			if (argc == 2) {
-				zSep = mem_as_str0(argv[1]);
-				nSep = mem_len_unsafe(argv[1]);
-			} else {
-				zSep = ",";
-				nSep = 1;
-			}
-			if (zSep)
-				sqlStrAccumAppend(pAccum, zSep, nSep);
-		}
-		zVal = mem_as_str0(argv[0]);
-		nVal = mem_len_unsafe(argv[0]);
-		if (zVal)
-			sqlStrAccumAppend(pAccum, zVal, nVal);
-	}
-}
-
-static void
-groupConcatFinalize(sql_context * context)
-{
-	StrAccum *pAccum;
-	pAccum = sql_aggregate_context(context, 0);
-	if (pAccum) {
-		if (pAccum->accError == STRACCUM_TOOBIG) {
-			diag_set(ClientError, ER_SQL_EXECUTE, "string or binary"\
-				 "string is too big");
-			context->is_aborted = true;
-		} else if (pAccum->accError == STRACCUM_NOMEM) {
-			context->is_aborted = true;
-		} else {
-			char *str = sqlStrAccumFinish(pAccum);
-			int len = pAccum->nChar;
-			assert(len >= 0);
-			if (context->func->def->returns == FIELD_TYPE_STRING)
-				mem_set_str_dynamic(context->pOut, str, len);
-			else
-				mem_set_bin_dynamic(context->pOut, str, len);
-		}
-	}
-}
-
 int
 sql_is_like_func(struct Expr *expr)
 {
@@ -2002,16 +1895,18 @@ struct sql_func_definition {
 static struct sql_func_definition definitions[] = {
 	{"ABS", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, absFunc, NULL},
 	{"ABS", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, absFunc, NULL},
-	{"AVG", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, sum_step, avgFinalize},
-	{"AVG", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, sum_step, avgFinalize},
+	{"ABS", 1, {FIELD_TYPE_DECIMAL}, FIELD_TYPE_DECIMAL, absFunc, NULL},
+	{"AVG", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, step_avg, fin_avg},
+	{"AVG", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_avg, fin_avg},
+	{"AVG", 1, {FIELD_TYPE_DECIMAL}, FIELD_TYPE_DECIMAL, step_avg, fin_avg},
 	{"CHAR", -1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_STRING, charFunc, NULL},
 	{"CHAR_LENGTH", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_INTEGER, lengthFunc,
 	 NULL},
 	{"COALESCE", -1, {FIELD_TYPE_ANY}, FIELD_TYPE_SCALAR, sql_builtin_stub,
 	 NULL},
-	{"COUNT", 0, {}, FIELD_TYPE_INTEGER, countStep, countFinalize},
-	{"COUNT", 1, {FIELD_TYPE_ANY}, FIELD_TYPE_INTEGER, countStep,
-	 countFinalize},
+	{"COUNT", 0, {}, FIELD_TYPE_INTEGER, step_count, fin_count},
+	{"COUNT", 1, {FIELD_TYPE_ANY}, FIELD_TYPE_INTEGER, step_count,
+	 fin_count},
 
 	{"GREATEST", -1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, minmaxFunc,
 	 NULL},
@@ -2028,13 +1923,13 @@ static struct sql_func_definition definitions[] = {
 	 NULL},
 
 	{"GROUP_CONCAT", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_STRING,
-	 groupConcatStep, groupConcatFinalize},
+	 step_group_concat, NULL},
 	{"GROUP_CONCAT", 2, {FIELD_TYPE_STRING, FIELD_TYPE_STRING},
-	 FIELD_TYPE_STRING, groupConcatStep, groupConcatFinalize},
+	 FIELD_TYPE_STRING, step_group_concat, NULL},
 	{"GROUP_CONCAT", 1, {FIELD_TYPE_VARBINARY}, FIELD_TYPE_VARBINARY,
-	 groupConcatStep, groupConcatFinalize},
+	 step_group_concat, NULL},
 	{"GROUP_CONCAT", 2, {FIELD_TYPE_VARBINARY, FIELD_TYPE_VARBINARY},
-	 FIELD_TYPE_VARBINARY, groupConcatStep, groupConcatFinalize},
+	 FIELD_TYPE_VARBINARY, step_group_concat, NULL},
 
 	{"HEX", 1, {FIELD_TYPE_VARBINARY}, FIELD_TYPE_STRING, hexFunc, NULL},
 	{"IFNULL", 2, {FIELD_TYPE_ANY, FIELD_TYPE_ANY}, FIELD_TYPE_SCALAR,
@@ -2065,35 +1960,25 @@ static struct sql_func_definition definitions[] = {
 	{"LOWER", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_STRING, LowerICUFunc,
 	 NULL},
 
-	{"MAX", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, minmaxStep,
-	 minMaxFinalize},
-	{"MAX", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, minmaxStep,
-	 minMaxFinalize},
-	{"MAX", 1, {FIELD_TYPE_NUMBER}, FIELD_TYPE_NUMBER, minmaxStep,
-	 minMaxFinalize},
-	{"MAX", 1, {FIELD_TYPE_VARBINARY}, FIELD_TYPE_VARBINARY, minmaxStep,
-	 minMaxFinalize},
-	{"MAX", 1, {FIELD_TYPE_UUID}, FIELD_TYPE_UUID, minmaxStep,
-	 minMaxFinalize},
-	{"MAX", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_STRING, minmaxStep,
-	 minMaxFinalize},
-	{"MAX", 1, {FIELD_TYPE_SCALAR}, FIELD_TYPE_SCALAR, minmaxStep,
-	 minMaxFinalize},
+	{"MAX", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, step_minmax, NULL},
+	{"MAX", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_minmax, NULL},
+	{"MAX", 1, {FIELD_TYPE_DECIMAL}, FIELD_TYPE_DECIMAL, step_minmax, NULL},
+	{"MAX", 1, {FIELD_TYPE_NUMBER}, FIELD_TYPE_NUMBER, step_minmax, NULL},
+	{"MAX", 1, {FIELD_TYPE_VARBINARY}, FIELD_TYPE_VARBINARY, step_minmax,
+	 NULL},
+	{"MAX", 1, {FIELD_TYPE_UUID}, FIELD_TYPE_UUID, step_minmax, NULL},
+	{"MAX", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_STRING, step_minmax, NULL},
+	{"MAX", 1, {FIELD_TYPE_SCALAR}, FIELD_TYPE_SCALAR, step_minmax, NULL},
 
-	{"MIN", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, minmaxStep,
-	 minMaxFinalize},
-	{"MIN", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, minmaxStep,
-	 minMaxFinalize},
-	{"MIN", 1, {FIELD_TYPE_NUMBER}, FIELD_TYPE_NUMBER, minmaxStep,
-	 minMaxFinalize},
-	{"MIN", 1, {FIELD_TYPE_VARBINARY}, FIELD_TYPE_VARBINARY, minmaxStep,
-	 minMaxFinalize},
-	{"MIN", 1, {FIELD_TYPE_UUID}, FIELD_TYPE_UUID, minmaxStep,
-	 minMaxFinalize},
-	{"MIN", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_STRING, minmaxStep,
-	 minMaxFinalize},
-	{"MIN", 1, {FIELD_TYPE_SCALAR}, FIELD_TYPE_SCALAR, minmaxStep,
-	 minMaxFinalize},
+	{"MIN", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, step_minmax, NULL},
+	{"MIN", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_minmax, NULL},
+	{"MIN", 1, {FIELD_TYPE_DECIMAL}, FIELD_TYPE_DECIMAL, step_minmax, NULL},
+	{"MIN", 1, {FIELD_TYPE_NUMBER}, FIELD_TYPE_NUMBER, step_minmax, NULL},
+	{"MIN", 1, {FIELD_TYPE_VARBINARY}, FIELD_TYPE_VARBINARY, step_minmax,
+	 NULL},
+	{"MIN", 1, {FIELD_TYPE_UUID}, FIELD_TYPE_UUID, step_minmax, NULL},
+	{"MIN", 1, {FIELD_TYPE_STRING}, FIELD_TYPE_STRING, step_minmax, NULL},
+	{"MIN", 1, {FIELD_TYPE_SCALAR}, FIELD_TYPE_SCALAR, step_minmax, NULL},
 
 	{"NULLIF", 2, {FIELD_TYPE_ANY, FIELD_TYPE_ANY}, FIELD_TYPE_SCALAR,
 	 nullifFunc, NULL},
@@ -2127,12 +2012,11 @@ static struct sql_func_definition definitions[] = {
 	{"SUBSTR", 3,
 	 {FIELD_TYPE_VARBINARY, FIELD_TYPE_INTEGER, FIELD_TYPE_INTEGER},
 	 FIELD_TYPE_VARBINARY, substrFunc, NULL},
-	{"SUM", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, sum_step, sumFinalize},
-	{"SUM", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, sum_step, sumFinalize},
-	{"TOTAL", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_DOUBLE, sum_step,
-	 totalFinalize},
-	{"TOTAL", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, sum_step,
-	 totalFinalize},
+	{"SUM", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, step_sum, NULL},
+	{"SUM", 1, {FIELD_TYPE_DECIMAL}, FIELD_TYPE_DECIMAL, step_sum, NULL},
+	{"SUM", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_sum, NULL},
+	{"TOTAL", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_sum,
+	 fin_total},
 
 	{"TRIM", 2, {FIELD_TYPE_STRING, FIELD_TYPE_INTEGER},
 	 FIELD_TYPE_STRING, trim_func, NULL},
@@ -2385,7 +2269,7 @@ sql_built_in_functions_cache_init(void)
 		assert(desc->argc != -1 || dict->argc_min != dict->argc_max);
 		def->param_count = desc->argc;
 		def->returns = desc->result;
-		def->aggregate = desc->finalize == NULL ?
+		def->aggregate = (dict->flags & SQL_FUNC_AGG) == 0 ?
 				 FUNC_AGGREGATE_NONE : FUNC_AGGREGATE_GROUP;
 		def->language = FUNC_LANGUAGE_SQL_BUILTIN;
 		def->name_len = len;

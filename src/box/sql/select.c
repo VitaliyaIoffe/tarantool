@@ -5526,8 +5526,8 @@ resetAccumulator(Parse * pParse, AggInfo * pAggInfo)
 		       && pAggInfo->aCol[i].iMem <= pAggInfo->mxReg);
 	}
 	for (i = 0; i < pAggInfo->nFunc; i++) {
-		assert(pAggInfo->aFunc[i].iMem >= pAggInfo->mnReg
-		       && pAggInfo->aFunc[i].iMem <= pAggInfo->mxReg);
+		assert(pAggInfo->aFunc[i].acc1 >= pAggInfo->mnReg
+		       && pAggInfo->aFunc[i].acc1 <= pAggInfo->mxReg);
 	}
 #endif
 	sqlVdbeAddOp3(v, OP_Null, 0, pAggInfo->mnReg, pAggInfo->mxReg);
@@ -5574,8 +5574,8 @@ finalizeAggFunctions(Parse * pParse, AggInfo * pAggInfo)
 	for (i = 0, pF = pAggInfo->aFunc; i < pAggInfo->nFunc; i++, pF++) {
 		ExprList *pList = pF->pExpr->x.pList;
 		assert(!ExprHasProperty(pF->pExpr, EP_xIsSelect));
-		sqlVdbeAddOp2(v, OP_AggFinal, pF->iMem,
-				  pList ? pList->nExpr : 0);
+		sqlVdbeAddOp3(v, OP_AggFinal, pF->acc1,
+			      pList != NULL ? pList->nExpr : 0, pF->acc2);
 		sqlVdbeAppendP4(v, pF->func, P4_FUNC);
 	}
 }
@@ -5621,8 +5621,8 @@ updateAccumulator(Parse * pParse, AggInfo * pAggInfo)
 			pParse->is_aborted = true;
 			return;
 		}
+		struct coll *coll = NULL;
 		if (sql_func_flag_is_set(pF->func, SQL_FUNC_NEEDCOLL)) {
-			struct coll *coll = NULL;
 			struct ExprList_item *pItem;
 			int j;
 			assert(pList != 0);	/* pList!=0 if pF->pFunc has NEEDCOLL */
@@ -5636,12 +5636,16 @@ updateAccumulator(Parse * pParse, AggInfo * pAggInfo)
 			}
 			if (regHit == 0 && pAggInfo->nAccumulator)
 				regHit = ++pParse->nMem;
-			sqlVdbeAddOp4(v, OP_CollSeq, regHit, 0, 0,
-					  (char *)coll, P4_COLLSEQ);
+			sqlVdbeAddOp1(v, OP_CollSeq, regHit);
 		}
-		sqlVdbeAddOp3(v, OP_AggStep0, 0, regAgg, pF->iMem);
-		sqlVdbeAppendP4(v, pF->func, P4_FUNC);
-		sqlVdbeChangeP5(v, (u8) nArg);
+		struct sql_context *ctx = sql_context_new(v, pF->func, nArg,
+							  coll);
+		if (ctx == NULL) {
+			pParse->is_aborted = true;
+			return;
+		}
+		sqlVdbeAddOp4(v, OP_AggStep, pF->acc1, regAgg, pF->acc2,
+			      (char *)ctx, P4_FUNCCTX);
 		sql_expr_type_cache_change(pParse, regAgg, nArg);
 		sqlReleaseTempRange(pParse, regAgg, nArg);
 		if (addrNext) {
@@ -6586,7 +6590,7 @@ sqlSelect(Parse * pParse,		/* The parser context */
 				vdbe_emit_open_cursor(pParse, cursor, index_id,
 						      space);
 				sqlVdbeAddOp2(v, OP_Count, cursor,
-						  sAggInfo.aFunc[0].iMem);
+						  sAggInfo.aFunc[0].acc1);
 				sqlVdbeAddOp1(v, OP_Close, cursor);
 				explain_simple_count(pParse, space->def->name);
 			} else
@@ -6744,4 +6748,22 @@ sql_expr_extract_select(struct Parse *parser, struct Select *select)
 	 */
 	parser->parsed_ast.expr =
 		sqlExprDup(parser->db, expr_list->a->pExpr, 0);
+}
+
+struct sql_context *
+sql_context_new(struct Vdbe *vdbe, struct func *func, uint32_t argc,
+		struct coll *coll)
+{
+	uint32_t size = sizeof(struct sql_context);
+	if (argc > 1)
+		size += (argc - 1) * sizeof(struct Mem);
+	struct sql_context *ctx = sqlDbMallocRawNN(sql_get(), size);
+	if (ctx == NULL)
+		return NULL;
+	ctx->pOut = NULL;
+	ctx->func = func;
+	ctx->pVdbe = vdbe;
+	ctx->argc = argc;
+	ctx->coll = coll;
+	return ctx;
 }
