@@ -597,6 +597,9 @@ mem_copy_as_ephemeral(struct Mem *to, const struct Mem *from);
 void
 mem_move(struct Mem *to, struct Mem *from);
 
+int
+mem_append(struct Mem *mem, const char *value, uint32_t len);
+
 /**
  * Concatenate strings or binaries from the first and the second MEMs and write
  * to the result MEM. In case the first MEM or the second MEM is NULL, the
