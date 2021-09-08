@@ -103,6 +103,8 @@ struct iproto_stream {
 	 * This field is accesable only from iproto thread.
 	 */
 	struct iproto_msg *current;
+	/** Length of queue `pending_requests`. */
+	size_t pending_requests_length;
 };
 
 /**
@@ -176,6 +178,8 @@ struct iproto_thread {
 	 * List of stopped connections
 	 */
 	struct rlist stopped_connections;
+	/** List of all connections */
+	struct rlist connections;
 	/*
 	 * Iproto thread stat
 	 */
@@ -190,6 +194,11 @@ struct iproto_thread {
 	struct evio_service binary;
 	/** Requests count currently pending in stream queue. */
 	size_t requests_in_stream_queue;
+	/*
+	 * The maximum length of the `pending_requests` queue
+	 * in the stream, for all time.
+	 */
+	size_t historical_stream_queue_length_max;
 	/**
 	 * The following fields are used exclusively by the tx thread.
 	 * Align them to prevent false-sharing.
@@ -577,6 +586,7 @@ struct iproto_connection
 	 */
 	enum iproto_connection_state state;
 	struct rlist in_stop_list;
+	struct rlist in_conn_list;
 	/**
 	 * Flag indicates, that client sent SHUT_RDWR or connection
 	 * is closed from client side. When it is set to false, we
@@ -672,6 +682,7 @@ iproto_stream_new(struct iproto_connection *connection, uint64_t stream_id)
 	stailq_create(&stream->pending_requests);
 	stream->id = stream_id;
 	stream->connection = connection;
+	stream->pending_requests_length = 0;
 	return stream;
 }
 
@@ -710,6 +721,7 @@ iproto_stream_delete(struct iproto_stream *stream)
 {
 	assert(stream->current == NULL);
 	assert(stailq_empty(&stream->pending_requests));
+	assert(stream->pending_requests_length == 0);
 	assert(stream->txn == NULL);
 	mempool_free(&stream->connection->iproto_thread->iproto_stream_pool, stream);
 }
@@ -988,6 +1000,27 @@ iproto_connection_input_buffer(struct iproto_connection *con)
 	return new_ibuf;
 }
 
+static size_t
+iproto_thread_get_max_stream_queue_length(struct iproto_thread *iproto_thread)
+{
+	size_t queue_len_max = 0;
+	struct rlist *entry;
+	rlist_foreach(entry, &iproto_thread->connections) {
+		struct iproto_connection *con =
+			rlist_entry(entry, struct iproto_connection,
+				    in_conn_list);
+		mh_int_t node;
+		mh_foreach(con->streams, node) {
+			struct iproto_stream *stream = (struct iproto_stream *)
+				mh_i64ptr_node(con->streams, node)->val;
+			queue_len_max =
+				MAX(stream->pending_requests_length,
+				    queue_len_max);
+		}
+	}
+	return queue_len_max;
+}
+
 /**
  * Check if message belongs to stream (stream_id != 0), and if it
  * is so create new stream or get stream from connection streams
@@ -1033,6 +1066,10 @@ iproto_msg_start_processing_in_stream(struct iproto_msg *msg)
 	}
 	con->iproto_thread->requests_in_stream_queue++;
 	rmean_collect(con->iproto_thread->rmean, REQUESTS_IN_STREAM_QUEUE, 1);
+	stream->pending_requests_length ++;
+	con->iproto_thread->historical_stream_queue_length_max =
+		MAX(con->iproto_thread->historical_stream_queue_length_max,
+		    stream->pending_requests_length);
 	stailq_add_tail_entry(&stream->pending_requests, msg, in_stream);
 	return 1;
 }
@@ -1396,6 +1433,7 @@ iproto_connection_new(struct iproto_thread *iproto_thread, int fd)
 	con->long_poll_count = 0;
 	con->session = NULL;
 	rlist_create(&con->in_stop_list);
+	rlist_add_tail(&iproto_thread->connections, &con->in_conn_list);
 	/* It may be very awkward to allocate at close. */
 	cmsg_init(&con->destroy_msg, con->iproto_thread->destroy_route);
 	cmsg_init(&con->disconnect_msg, con->iproto_thread->disconnect_route);
@@ -1426,6 +1464,7 @@ iproto_connection_delete(struct iproto_connection *con)
 	assert(con->obuf[1].pos == 0 &&
 	       con->obuf[1].iov[0].iov_base == NULL);
 
+	rlist_del(&con->in_conn_list);
 	assert(mh_size(con->streams) == 0);
 	mh_i64ptr_delete(con->streams);
 	mempool_free(&con->iproto_thread->iproto_connection_pool, con);
@@ -2330,6 +2369,7 @@ iproto_msg_finish_processing_in_stream(struct iproto_msg *msg)
 		assert(stream->current != NULL);
 		stream->current->wpos = con->wpos;
 		con->iproto_thread->requests_in_stream_queue--;
+		stream->pending_requests_length--;
 		cpipe_push_input(&con->iproto_thread->tx_pipe,
 				 &stream->current->base);
 		cpipe_flush_input(&con->iproto_thread->tx_pipe);
@@ -2753,8 +2793,10 @@ iproto_thread_init(struct iproto_thread *iproto_thread)
 	if (iproto_thread->tx.rmean == NULL)
 		goto fail;
 	rlist_create(&iproto_thread->stopped_connections);
+	rlist_create(&iproto_thread->connections);
 	iproto_thread->tx.requests_in_progress = 0;
 	iproto_thread->requests_in_stream_queue = 0;
+	iproto_thread->historical_stream_queue_length_max = 0;
 	return 0;
 fail:
 	if (iproto_thread->rmean != NULL)
@@ -2897,6 +2939,10 @@ iproto_fill_stat(struct iproto_thread *iproto_thread,
 		mempool_count(&iproto_thread->iproto_msg_pool);
 	cfg_msg->stats->requests_in_stream_queue =
 		iproto_thread->requests_in_stream_queue;
+	cfg_msg->stats->stream_queue_length_max =
+		iproto_thread_get_max_stream_queue_length(iproto_thread);
+	cfg_msg->stats->historical_stream_queue_length_max =
+		iproto_thread->historical_stream_queue_length_max;
 }
 
 static int
@@ -3008,6 +3054,12 @@ iproto_stats_collect_thread_stats(struct iproto_stats *total_stats,
 	total_stats->requests += thread_stats->requests;
 	total_stats->requests_in_stream_queue +=
 		thread_stats->requests_in_stream_queue;
+	total_stats->stream_queue_length_max =
+		MAX(thread_stats->stream_queue_length_max,
+		    total_stats->stream_queue_length_max);
+	total_stats->historical_stream_queue_length_max =
+		MAX(thread_stats->historical_stream_queue_length_max,
+		    total_stats->historical_stream_queue_length_max);
 }
 
 void

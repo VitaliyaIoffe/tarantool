@@ -69,6 +69,10 @@ struct iproto_stats {
 	size_t requests_in_progress;
 	/** Count of requests currently pending in stream queue. */
 	size_t requests_in_stream_queue;
+	/** Length of the current longest stream queue */
+	size_t stream_queue_length_max;
+	/** Length of the longest stream queue for the all time */
+	size_t historical_stream_queue_length_max;
 };
 
 extern unsigned iproto_readahead;

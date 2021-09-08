@@ -84,6 +84,25 @@ function check_requests_stats_per_thread_using_index(thread_count)
     assert(total == in_progress + in_stream_queue)
     return total, in_progress, in_stream_queue
 end;
+function get_stream_queue_length_max_using_call()
+    local box_stat_net = test_run:cmd(string.format(
+        "eval test 'return box.stat.net()'"
+    ))[1]
+    local current = box_stat_net.STREAM_QUEUE_MAX.current
+    local total =  box_stat_net.STREAM_QUEUE_MAX.total
+    return current, total
+end;
+function get_stream_queue_length_max_using_index()
+   local current = test_run:cmd(string.format(
+        "eval test 'return box.stat.net.%s.%s'",
+        "STREAM_QUEUE_MAX", "current"
+    ))[1]
+    local total = test_run:cmd(string.format(
+        "eval test 'return box.stat.net.%s.%s'",
+        "STREAM_QUEUE_MAX", "total"
+    ))[1]
+    return current, total
+end;
 test_run:cmd("setopt delimiter ''");
 
 -- We check that statistics gathered per each thread in sum is equal to
@@ -149,6 +168,24 @@ for i = 1, request_count do
         total_thd_c_call == total_c_call and
         in_progress_thd_c_call == in_progress_c_call and
         in_stream_queue_thd_c_call == in_stream_queue_c_call
+    )
+    local current_stream_queue_length_max_call,
+          total_stream_queue_length_max_call =
+          get_stream_queue_length_max_using_call()
+    local current_stream_queue_length_max_index,
+          total_stream_queue_length_max_index =
+          get_stream_queue_length_max_using_index()
+    assert(
+        current_stream_queue_length_max_call ==
+        current_stream_queue_length_max_index
+    )
+    assert(
+        total_stream_queue_length_max_call ==
+        total_stream_queue_length_max_index
+    )
+    assert(
+        current_stream_queue_length_max_call == request_count - i and
+        total_stream_queue_length_max_call == request_count - 1
     )
     test_run:cmd("eval test 'wakeup()'")
 end;

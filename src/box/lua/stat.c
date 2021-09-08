@@ -77,6 +77,14 @@ inject_iproto_stats(struct lua_State *L, struct iproto_stats *stats)
 			    stats->requests_in_progress);
 	inject_current_stat(L, "REQUESTS_IN_STREAM_QUEUE",
 			    stats->requests_in_stream_queue);
+	lua_pushstring(L, "STREAM_QUEUE_MAX");
+	lua_newtable(L);
+	lua_pushstring(L, "total");
+	lua_pushnumber(L, stats->historical_stream_queue_length_max);
+	lua_rawset(L, -3);
+	lua_rawset(L, -3);
+	inject_current_stat(L, "STREAM_QUEUE_MAX",
+			    stats->stream_queue_length_max);
 }
 
 static void
@@ -174,11 +182,21 @@ static int
 lbox_stat_net_index(struct lua_State *L)
 {
 	const char *key = luaL_checkstring(L, -1);
+	struct iproto_stats stats;
+	iproto_stats_get(&stats);
+	if (strcmp(key, "STREAM_QUEUE_MAX") == 0) {
+		lua_newtable(L);
+		lua_pushstring(L, "total");
+		lua_pushnumber(L, stats.historical_stream_queue_length_max);
+		lua_rawset(L, -3);
+		lua_pushstring(L, "current");
+		lua_pushnumber(L, stats.stream_queue_length_max);
+		lua_rawset(L, -3);
+		return 1;
+	}
 	if (iproto_rmean_foreach(seek_stat_item, L) == 0)
 		return 0;
 
-	struct iproto_stats stats;
-	iproto_stats_get(&stats);
 	if (strcmp(key, "CONNECTIONS") == 0) {
 		lua_pushstring(L, "current");
 		lua_pushnumber(L, stats.connections);
@@ -214,7 +232,8 @@ lbox_stat_net_index(struct lua_State *L)
  * - STREAMS: total, rps, current;
  * - REQUESTS: total, rps, current;
  * - REQUESTS_IN_PROGRESS: total, rps, current;
- * - REQUESTS_IN_STREAM_QUEUE: total, rps, current.
+ * - REQUESTS_IN_STREAM_QUEUE: total, rps, current;
+ * - STREAM_QUEUE_MAX: total, current.
  *
  * These fields have the following meaning:
  *
