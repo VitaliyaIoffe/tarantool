@@ -484,18 +484,6 @@ void
 sql_row_count(struct sql_context *context, MAYBE_UNUSED int unused1,
 	      MAYBE_UNUSED sql_value **unused2);
 
-void *
-sql_aggregate_context(sql_context *,
-			  int nBytes);
-
-/**
- * Allocate or return the aggregate context containing struct MEM for a user
- * function. A new context is allocated on the first call. Subsequent calls
- * return the same context that was returned on prior calls.
- */
-struct Mem *
-sql_context_agg_mem(struct sql_context *context);
-
 int
 sql_column_count(sql_stmt * pStmt);
 

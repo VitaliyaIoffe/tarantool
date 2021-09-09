@@ -4145,7 +4145,6 @@ case OP_AggStep: {
 	int argc = pOp->p1;
 	sql_context *pCtx;
 	Mem *pMem;
-	Mem t;
 
 	assert(pOp->p4type==P4_FUNCCTX);
 	pCtx = pOp->p4.pCtx;
@@ -4156,8 +4155,8 @@ case OP_AggStep: {
 	 * checks to see if the register array has changed, and if so it
 	 * reinitializes the relavant parts of the sql_context object
 	 */
-	if (pCtx->pMem != pMem) {
-		pCtx->pMem = pMem;
+	if (pCtx->pOut != pMem) {
+		pCtx->pOut = pMem;
 		for(i = 0; i < argc; ++i)
 			pCtx->argv[i] = &aMem[pOp->p2 + i];
 	}
@@ -4169,18 +4168,12 @@ case OP_AggStep: {
 	}
 #endif
 
-	mem_create(&t);
-	pCtx->pOut = &t;
-	pCtx->is_aborted = false;
 	pCtx->skipFlag = 0;
 	assert(pCtx->func->def->language == FUNC_LANGUAGE_SQL_BUILTIN);
 	struct func_sql_builtin *func = (struct func_sql_builtin *)pCtx->func;
 	func->call(pCtx, argc, pCtx->argv);
-	if (pCtx->is_aborted) {
-		mem_destroy(&t);
+	if (pCtx->is_aborted)
 		goto abort_due_to_error;
-	}
-	assert(mem_is_null(&t));
 	if (pCtx->skipFlag) {
 		assert(pOp[-1].opcode == OP_SkipLoad);
 		i = pOp[-1].p1;
@@ -4207,24 +4200,14 @@ case OP_AggFinal: {
 	struct func_sql_builtin *func = (struct func_sql_builtin *)pOp->p4.func;
 	struct Mem *pIn1 = &aMem[pOp->p1];
 
-	struct sql_context ctx;
-	memset(&ctx, 0, sizeof(ctx));
-	struct Mem t;
-	memset(&t, 0, sizeof(t));
-	t.type = MEM_TYPE_NULL;
-	assert(t.flags == 0);
-	t.db = pIn1->db;
-	ctx.pOut = &t;
-	ctx.pMem = pIn1;
-	ctx.func = pOp->p4.func;
-	func->finalize(&ctx);
-	assert((pIn1->flags & MEM_Dyn) == 0);
-	if (pIn1->szMalloc > 0)
-		sqlDbFree(pIn1->db, pIn1->zMalloc);
-	memcpy(pIn1, &t, sizeof(t));
-
-	if (ctx.is_aborted)
-		goto abort_due_to_error;
+	if (func->finalize != NULL) {
+		struct sql_context ctx;
+		memset(&ctx, 0, sizeof(ctx));
+		ctx.pOut = pIn1;
+		func->finalize(&ctx);
+		if (ctx.is_aborted)
+			goto abort_due_to_error;
+	}
 	UPDATE_MAX_BLOBSIZE(pIn1);
 	if (sqlVdbeMemTooBig(pIn1) != 0)
 		goto too_big;
