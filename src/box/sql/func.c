@@ -53,6 +53,29 @@
 static struct mh_strnptr_t *built_in_functions = NULL;
 static struct func_sql_builtin **functions;
 
+/** Implementation of the SUM() function. */
+static void
+step_sum(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1);
+	(void)argc;
+	assert(ctx->pMem->type == MEM_TYPE_NULL || mem_is_num(ctx->pMem));
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return;
+	if (ctx->pMem->type == MEM_TYPE_NULL)
+		return mem_copy_as_ephemeral(ctx->pMem, argv[0]);
+	if (mem_add(ctx->pMem, argv[0], ctx->pMem) != 0)
+		ctx->is_aborted = true;
+}
+
+/** Finalizer for the SUM() function. */
+static void
+fin_sum(struct sql_context *ctx)
+{
+	assert(ctx->pMem->type == MEM_TYPE_NULL || mem_is_num(ctx->pMem));
+	mem_copy_as_ephemeral(ctx->pOut, ctx->pMem);
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -1655,17 +1678,6 @@ sum_step(struct sql_context *context, int argc, sql_value **argv)
 }
 
 static void
-sumFinalize(sql_context * context)
-{
-	SumCtx *p;
-	p = sql_aggregate_context(context, 0);
-	if (p == NULL || p->count == 0)
-		mem_set_null(context->pOut);
-	else
-		mem_copy_as_ephemeral(context->pOut, &p->mem);
-}
-
-static void
 avgFinalize(sql_context * context)
 {
 	SumCtx *p;
@@ -2113,8 +2125,9 @@ static struct sql_func_definition definitions[] = {
 	{"SUBSTR", 3,
 	 {FIELD_TYPE_VARBINARY, FIELD_TYPE_INTEGER, FIELD_TYPE_INTEGER},
 	 FIELD_TYPE_VARBINARY, substrFunc, NULL},
-	{"SUM", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, sum_step, sumFinalize},
-	{"SUM", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, sum_step, sumFinalize},
+	{"SUM", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_sum, fin_sum},
+	{"SUM", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, step_sum, fin_sum},
+	{"SUM", 1, {FIELD_TYPE_DECIMAL}, FIELD_TYPE_DECIMAL, step_sum, fin_sum},
 	{"TOTAL", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_DOUBLE, sum_step,
 	 totalFinalize},
 	{"TOTAL", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, sum_step,
