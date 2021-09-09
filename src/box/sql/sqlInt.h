@@ -4142,7 +4142,7 @@ void sqlStrAccumReset(StrAccum *);
 void sqlSelectDestInit(SelectDest *, int, int, int);
 
 struct sql_context *
-sql_context_new(struct Vdbe *vdbe, struct func *func, uint32_t argc);
+sql_context_new(struct func *func, uint32_t argc, struct coll *coll);
 
 /*
  * Create an expression to load @a column from datasource
@@ -4204,7 +4204,6 @@ void sqlParser(void *, int, Token, Parse *);
 int sqlParserStackPeak(void *);
 #endif
 
-sql_int64 sqlStmtCurrentTime(sql_context *);
 int sqlVdbeParameterIndex(Vdbe *, const char *, int);
 int sqlTransferBindings(sql_stmt *, sql_stmt *);
 int sqlReprepare(Vdbe *);
