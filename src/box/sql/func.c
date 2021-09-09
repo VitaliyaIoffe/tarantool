@@ -76,6 +76,32 @@ fin_sum(struct sql_context *ctx)
 	mem_copy_as_ephemeral(ctx->pOut, ctx->pMem);
 }
 
+/** Implementation of the TOTAL() function. */
+static void
+step_total(struct sql_context *ctx, int argc, struct Mem **argv)
+{
+	assert(argc == 1);
+	(void)argc;
+	assert(ctx->pMem->type == MEM_TYPE_NULL || mem_is_num(ctx->pMem));
+	if (argv[0]->type == MEM_TYPE_NULL)
+		return;
+	if (ctx->pMem->type == MEM_TYPE_NULL)
+		mem_set_double(ctx->pMem, 0.0);
+	if (mem_add(ctx->pMem, argv[0], ctx->pMem) != 0)
+		ctx->is_aborted = true;
+}
+
+/** Finalizer for the TOTAL() function. */
+static void
+fin_total(struct sql_context *ctx)
+{
+	assert(ctx->pMem->type == MEM_TYPE_NULL || mem_is_double(ctx->pMem));
+	if (ctx->pMem->type == MEM_TYPE_NULL)
+		mem_set_double(ctx->pOut, 0.0);
+	else
+		mem_copy_as_ephemeral(ctx->pOut, ctx->pMem);
+}
+
 static const unsigned char *
 mem_as_ustr(struct Mem *mem)
 {
@@ -1693,17 +1719,6 @@ avgFinalize(sql_context * context)
 		context->is_aborted = true;
 }
 
-static void
-totalFinalize(sql_context * context)
-{
-	SumCtx *p;
-	p = sql_aggregate_context(context, 0);
-	if (p == NULL || p->count == 0)
-		mem_set_double(context->pOut, 0.0);
-	else
-		mem_copy_as_ephemeral(context->pOut, &p->mem);
-}
-
 /*
  * The following structure keeps track of state information for the
  * count() aggregate function.
@@ -2128,10 +2143,12 @@ static struct sql_func_definition definitions[] = {
 	{"SUM", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_sum, fin_sum},
 	{"SUM", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_INTEGER, step_sum, fin_sum},
 	{"SUM", 1, {FIELD_TYPE_DECIMAL}, FIELD_TYPE_DECIMAL, step_sum, fin_sum},
-	{"TOTAL", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_DOUBLE, sum_step,
-	 totalFinalize},
-	{"TOTAL", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, sum_step,
-	 totalFinalize},
+	{"TOTAL", 1, {FIELD_TYPE_DOUBLE}, FIELD_TYPE_DOUBLE, step_total,
+	 fin_total},
+	{"TOTAL", 1, {FIELD_TYPE_INTEGER}, FIELD_TYPE_DOUBLE, step_total,
+	 fin_total},
+	{"TOTAL", 1, {FIELD_TYPE_DECIMAL}, FIELD_TYPE_DOUBLE, step_total,
+	 fin_total},
 
 	{"TRIM", 2, {FIELD_TYPE_STRING, FIELD_TYPE_INTEGER},
 	 FIELD_TYPE_STRING, trim_func, NULL},

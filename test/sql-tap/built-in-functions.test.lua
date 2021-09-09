@@ -1,6 +1,6 @@
 #!/usr/bin/env tarantool
 local test = require("sqltester")
-test:plan(55)
+test:plan(58)
 
 local dec = require('decimal')
 
@@ -497,7 +497,7 @@ test:do_test(
         local res = {pcall(box.execute, [[SELECT TOTAL(?);]], {'1'})}
         return {tostring(res[3])}
     end, {
-        "Type mismatch: can not convert string('1') to integer"
+        "Type mismatch: can not convert string('1') to double"
     })
 
 --
@@ -573,6 +573,35 @@ test:do_execsql_test(
     ]],
     {
         dec.new(124.432)
+    }
+)
+
+-- Make sure TOTAL() accepts DOUBLE by default.
+test:do_test(
+    "builtins-4.2.1",
+    function()
+        return box.execute([[SELECT TOTAL(?);]], {1}).metadata
+    end, {
+        {name = "COLUMN_1", type = "double"},
+    })
+
+test:do_test(
+    "builtins-4.2.2",
+    function()
+        local res = {pcall(box.execute, [[SELECT TOTAL(?);]], {-1ULL})}
+        return {tostring(res[3])}
+    end, {
+        "Type mismatch: can not convert integer(18446744073709551615) to double"
+    })
+
+-- Make sure TOTAL() works with DECIMAL properly.
+test:do_execsql_test(
+    "builtins-4.2.3",
+    [[
+        SELECT TOTAL(cast(column_2 as DECIMAL)) from (values(1), (123.432));
+    ]],
+    {
+        124.432
     }
 )
 
