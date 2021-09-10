@@ -90,6 +90,7 @@ static char status[64] = "unknown";
 struct rmean *rmean_box;
 
 double on_shutdown_trigger_timeout = 3.0;
+double txn_timeout = 2.0;
 
 struct rlist box_on_shutdown_trigger_list =
 	RLIST_HEAD_INITIALIZER(box_on_shutdown_trigger_list);
@@ -211,7 +212,7 @@ box_process_rw(struct request *request, struct space *space,
 	bool return_tuple = false;
 	struct txn *txn = in_txn();
 	bool is_autocommit = txn == NULL;
-	if (is_autocommit && (txn = txn_begin()) == NULL)
+	if (is_autocommit && (txn = txn_begin(TIMEOUT_INFINITY)) == NULL)
 		return -1;
 	assert(iproto_type_is_dml(request->type));
 	rmean_collect(rmean_box, request->type, 1);
@@ -485,7 +486,7 @@ wal_stream_apply_dml_row(struct wal_stream *stream, struct xrow_header *row)
 		 * start now, apply the rows, and make a yield after commit if
 		 * necessary. Helps to avoid a lot of copying.
 		 */
-		txn = txn_begin();
+		txn = txn_begin(TIMEOUT_INFINITY);
 		if (txn == NULL) {
 			say_error("couldn't begin a recovery transaction");
 			return -1;
@@ -1141,6 +1142,18 @@ box_check_iproto_options(void)
 	return 0;
 }
 
+static int
+box_check_txn_timeout(void)
+{
+	double timeout = cfg_getd("txn_timeout");
+	if (timeout <= 0) {
+		diag_set(ClientError, ER_CFG, "txn_timeout",
+			 "the value must be greather than 0");
+		return -1;
+	}
+	return 0;
+}
+
 void
 box_check_config(void)
 {
@@ -1182,6 +1195,8 @@ box_check_config(void)
 	if (box_check_iproto_options() != 0)
 		diag_raise();
 	if (box_check_sql_cache_size(cfg_geti("sql_cache_size")) != 0)
+		diag_raise();
+	if (box_check_txn_timeout() != 0)
 		diag_raise();
 }
 
@@ -2033,6 +2048,18 @@ box_set_crash(void)
 	}
 
 	crash_cfg(host, is_enabled_1 && is_enabled_2);
+	return 0;
+}
+
+int
+box_set_txn_timeout(void)
+{
+	double timeout = cfg_getd("txn_timeout");
+	if (timeout <= 0) {
+		diag_set(ClientError, ER_CFG, "txn_timeout",
+			 "the value must be greather than 0");
+		return -1;
+	}
 	return 0;
 }
 

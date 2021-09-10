@@ -1775,12 +1775,19 @@ tx_accept_msg(struct cmsg *m)
 	return msg;
 }
 
+static void
+txn_cleanup(void *cleanup_data)
+{
+	struct iproto_stream *stream = (struct iproto_stream *)cleanup_data;
+	stream->txn = NULL;
+}
+
 static inline void
 tx_end_msg(struct iproto_msg *msg)
 {
 	if (msg->stream != NULL) {
 		assert(msg->stream->txn == NULL);
-		msg->stream->txn = txn_detach();
+		msg->stream->txn = txn_detach(txn_cleanup, msg->stream);
 	}
 }
 
@@ -1831,7 +1838,7 @@ tx_process_begin(struct cmsg *m)
 	if (tx_check_schema(msg->header.schema_version))
 		goto error;
 
-	if (box_txn_begin() != 0)
+	if (box_txn_begin_timeout(txn_timeout) != 0)
 		goto error;
 
 	out = msg->connection->tx.p_obuf;

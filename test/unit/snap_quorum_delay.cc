@@ -95,7 +95,7 @@ txn_process_func(va_list ap)
 {
 	bool *check_trg = va_arg(ap, bool *);
 	enum process_type process_type = (enum process_type)va_arg(ap, int);
-	struct txn *txn = txn_begin();
+	struct txn *txn = txn_begin(TIMEOUT_INFINITY);
 	txn->fiber = fiber();
 	/* Simulate a sync transaction. */
 	txn_set_flags(txn, TXN_WAIT_SYNC | TXN_WAIT_ACK);

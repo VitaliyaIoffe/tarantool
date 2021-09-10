@@ -70,7 +70,7 @@ ffi.cdef[[
     int64_t
     box_txn_id();
     int
-    box_txn_begin();
+    box_txn_begin_timeout(double timeout);
     /** \endcond public */
     /** \cond public */
     int
@@ -328,8 +328,10 @@ local function feedback_save_event(event)
     end
 end
 
-box.begin = function()
-    if builtin.box_txn_begin() == -1 then
+box.begin = function(timeout)
+    timeout = timeout or box.cfg.txn_timeout
+    check_param(timeout, 'timeout', 'number')
+    if builtin.box_txn_begin_timeout(timeout) == -1 then
         box.error()
     end
 end

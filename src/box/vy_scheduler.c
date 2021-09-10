@@ -56,6 +56,7 @@
 #include "vy_mem.h"
 #include "vy_range.h"
 #include "vy_run.h"
+#include "box.h"
 #include "vy_write_iterator.h"
 #include "trivia/util.h"
 
@@ -902,7 +903,7 @@ vy_deferred_delete_batch_process_f(struct cmsg *cmsg)
 	deferred_delete_space = space_by_id(BOX_VINYL_DEFERRED_DELETE_ID);
 	assert(deferred_delete_space != NULL);
 
-	struct txn *txn = txn_begin();
+	struct txn *txn = txn_begin(TIMEOUT_INFINITY);
 	if (txn == NULL)
 		goto fail;
 

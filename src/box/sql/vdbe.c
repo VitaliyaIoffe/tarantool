@@ -2238,7 +2238,7 @@ case OP_TransactionBegin: {
 		diag_set(ClientError, ER_ACTIVE_TRANSACTION);
 		goto abort_due_to_error;
 	}
-	if (txn_begin() == NULL)
+	if (txn_begin(TIMEOUT_INFINITY) == NULL)
 		goto abort_due_to_error;
 	p->auto_commit = false	;
 	break;
@@ -2294,7 +2294,7 @@ case OP_TransactionRollback: {
  */
 case OP_TTransaction: {
 	if (!box_txn()) {
-		if (txn_begin() == NULL)
+		if (txn_begin(TIMEOUT_INFINITY) == NULL)
 			goto abort_due_to_error;
 	} else {
 		p->anonymous_savepoint = txn_savepoint_new(in_txn(), NULL);

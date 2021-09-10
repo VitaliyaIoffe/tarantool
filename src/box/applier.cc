@@ -252,7 +252,7 @@ apply_snapshot_row(struct xrow_header *row)
 	struct space *space = space_cache_find(request.space_id);
 	if (space == NULL)
 		return -1;
-	struct txn *txn = txn_begin();
+	struct txn *txn = txn_begin(TIMEOUT_INFINITY);
 	if (txn == NULL)
 		return -1;
 	/*
@@ -948,7 +948,7 @@ apply_plain_tx(uint32_t replica_id, struct stailq *rows,
 	 * conflict safely access failed xrow object and allocate
 	 * IPROTO_NOP on gc.
 	 */
-	struct txn *txn = txn_begin();
+	struct txn *txn = txn_begin(TIMEOUT_INFINITY);
 	struct applier_tx_row *item;
 	if (txn == NULL)
 		 return -1;

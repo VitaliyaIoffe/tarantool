@@ -95,6 +95,7 @@ box_tuple_validate
 box_txn
 box_txn_alloc
 box_txn_begin
+box_txn_begin_timeout
 box_txn_commit
 box_txn_id
 box_txn_rollback

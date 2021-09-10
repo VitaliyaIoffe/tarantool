@@ -53,6 +53,13 @@ txn_on_stop(struct trigger *trigger, void *event);
 static int
 txn_on_yield(struct trigger *trigger, void *event);
 
+static void
+txn_cleanup(void *cleanup_data)
+{
+	struct fiber *fiber = (struct fiber *)cleanup_data;
+	fiber_set_txn(fiber, NULL);
+}
+
 static int
 txn_add_redo(struct txn *txn, struct txn_stmt *stmt, struct request *request)
 {
@@ -216,6 +223,7 @@ txn_new(void)
 inline static void
 txn_free(struct txn *txn)
 {
+	ev_timer_stop(loop(), &txn->rollback_timer);
 	memtx_tx_clean_txn(txn);
 	struct tx_read_tracker *tracker, *tmp;
 	rlist_foreach_entry_safe(tracker, &txn->read_set,
@@ -251,6 +259,22 @@ txn_free(struct txn *txn)
 	stailq_add(&txn_cache, &txn->in_txn_cache);
 }
 
+static void
+txn_schedule_timeout(ev_loop *loop, ev_timer *watcher, int revents)
+{
+	(void) loop;
+	(void) revents;
+
+	struct txn *txn = (struct txn *)watcher->data;
+	if (txn->status != TXN_INPROGRESS && txn->status != TXN_CONFLICTED &&
+	    txn->status != TXN_IN_READ_VIEW)
+		return;
+	diag_set(ClientError, ER_TXN_ROLLBACK, "txn timeout expired");
+	txn->cleanup(txn->cleanup_data);
+	txn_attach(txn);
+	txn_abort(txn);
+}
+
 void
 diag_set_txn_sign_detailed(const char *file, unsigned line, int64_t signature)
 {
@@ -277,7 +301,7 @@ diag_set_txn_sign_detailed(const char *file, unsigned line, int64_t signature)
 }
 
 struct txn *
-txn_begin(void)
+txn_begin(double timeout)
 {
 	static int64_t tsn = 0;
 	assert(! in_txn());
@@ -316,6 +340,11 @@ txn_begin(void)
 	 * if they are not supported.
 	 */
 	txn_set_flags(txn, TXN_CAN_YIELD);
+	ev_timer_init(&txn->rollback_timer, txn_schedule_timeout, timeout, 0);
+	txn->rollback_timer.data = txn;
+	txn->cleanup = txn_cleanup;
+	txn->cleanup_data = fiber();
+	ev_timer_start(loop(), &txn->rollback_timer);
 	return txn;
 }
 
@@ -885,7 +914,6 @@ txn_commit(struct txn *txn)
 	struct txn_limbo_entry *limbo_entry = NULL;
 
 	txn->fiber = fiber();
-
 	if (txn_prepare(txn) != 0)
 		goto rollback_abort;
 
@@ -1044,13 +1072,25 @@ box_txn(void)
 }
 
 int
-box_txn_begin(void)
+box_txn_begin()
 {
 	if (in_txn()) {
 		diag_set(ClientError, ER_ACTIVE_TRANSACTION);
 		return -1;
 	}
-	if (txn_begin() == NULL)
+	if (txn_begin(TIMEOUT_INFINITY) == NULL)
+		return -1;
+	return 0;
+}
+
+int
+box_txn_begin_timeout(double timeout)
+{
+	if (in_txn()) {
+		diag_set(ClientError, ER_ACTIVE_TRANSACTION);
+		return -1;
+	}
+	if (txn_begin(timeout) == NULL)
 		return -1;
 	return 0;
 }
@@ -1262,7 +1302,7 @@ txn_on_yield(struct trigger *trigger, void *event)
 }
 
 struct txn *
-txn_detach(void)
+txn_detach(void (*cleanup)(void *), void *cleanup_data)
 {
 	struct txn *txn = in_txn();
 	if (txn == NULL)
@@ -1273,6 +1313,8 @@ txn_detach(void)
 	}
 	trigger_clear(&txn->fiber_on_stop);
 	fiber_set_txn(fiber(), NULL);
+	txn->cleanup = cleanup;
+	txn->cleanup_data = cleanup_data;
 	return txn;
 }
 

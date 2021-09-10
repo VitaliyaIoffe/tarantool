@@ -26,7 +26,9 @@ local mt = {
         return type(res) == 'table' and setmetatable(res, array_mt) or res
     end,
     __index = {
-        begin    = function(self) return self('box.begin()') end,
+        begin    = function(self, timeout)
+            return self(string.format('box.begin(%f)', timeout))
+        end,
         commit   = function(self) return self('box.commit()') end,
         rollback = function(self) return self('box.rollback()') end,
         close    = function(self) self.c1:close(); self.c2:close() end

@@ -428,6 +428,15 @@ struct txn {
 	struct rlist in_all_txs;
 	/** True in case transaction provides any DDL change. */
 	bool is_schema_changed;
+	/**
+	 * Timer that is alarmed if the transaction did not have time
+	 * to complete within the timeout specified when it was created.
+	 */
+	struct ev_timer rollback_timer;
+	/* Cleanup function, called when rollback timer alarmed. */
+	void (*cleanup)(void *);
+	/** Pointer to the data passed to cleanup function. */
+	void *cleanup_data;
 };
 
 static inline bool
@@ -472,7 +481,7 @@ fiber_set_txn(struct fiber *fiber, struct txn *txn)
  * support yeild.
  */
 struct txn *
-txn_detach(void);
+txn_detach(void (*cleanup)(void *), void *cleanup_data);
 
 /**
  * Attach transaction to fiber.
@@ -487,7 +496,7 @@ txn_attach(struct txn *txn);
  * @pre no transaction is active
  */
 struct txn *
-txn_begin(void);
+txn_begin(double timeout);
 
 /**
  * Complete transaction processing with an error. All the changes are going to
@@ -791,7 +800,14 @@ box_txn(void);
  * started
  */
 API_EXPORT int
-box_txn_begin(void);
+box_txn_begin();
+
+/**
+ * Same as `box_txn_begin` but if transaction does not complete in a given
+ * @timeout, it will be rollbacked.
+ */
+API_EXPORT int
+box_txn_begin_timeout(double timeout);
 
 /**
  * Commit the current transaction.

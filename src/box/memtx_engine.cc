@@ -52,6 +52,7 @@
 #include "raft.h"
 #include "txn_limbo.h"
 #include "memtx_allocator.h"
+#include "box.h"
 
 #include <type_traits>
 
@@ -269,7 +270,7 @@ memtx_engine_recover_snapshot_row(struct memtx_engine *memtx,
 		diag_set(ClientError, ER_CROSS_ENGINE_TRANSACTION);
 		return -1;
 	}
-	struct txn *txn = txn_begin();
+	struct txn *txn = txn_begin(TIMEOUT_INFINITY);
 	if (txn == NULL)
 		return -1;
 	if (txn_begin_stmt(txn, space, request.type) != 0)
