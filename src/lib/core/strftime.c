@@ -38,9 +38,8 @@
 #include "datetime.h"
 
 #include <assert.h>
-#include <ctype.h>
-//#include <fcntl.h>
 #include <locale.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 struct lc_time_T {
@@ -577,13 +576,9 @@ static char *_fmt(const char *format, const struct dt_tm *t, char *pt,
 					    true, true, pt, ptlim);
 				continue;
 			case 'Z':
-#ifdef TM_ZONE
-				pt = _add(t->TM_ZONE, pt, ptlim);
-#elif HAVE_TZNAME
 				if (t->tm_isdst >= 0)
 					pt = _add(tzname[t->tm_isdst != 0],
 						  pt, ptlim);
-#endif
 				/*
 				 ** C99 and later say that %Z must be
 				 ** replaced by the empty string if the
@@ -592,61 +587,18 @@ static char *_fmt(const char *format, const struct dt_tm *t, char *pt,
 				 */
 				continue;
 			case 'z':
-#if defined TM_GMTOFF || USG_COMPAT || ALTZONE
 				{
 					long diff;
 					char const *sign;
 					bool negative;
 
-#ifdef TM_GMTOFF
-					diff = t->TM_GMTOFF;
-#else
-					/*
-					 ** C99 and later say that the UT offset must
-					 ** be computed by looking only at
-					 ** tm_isdst. This requirement is
-					 ** incorrect, since it means the code
-					 ** must rely on magic (in this case
-					 ** altzone and timezone), and the
-					 ** magic might not have the correct
-					 ** offset. Doing things correctly is
-					 ** tricky and requires disobeying the standard;
-					 ** see GNU C strftime for details.
-					 ** For now, punt and conform to the
-					 ** standard, even though it's incorrect.
-					 **
-					 ** C99 and later say that %z must be replaced by
-					 ** the empty string if the time zone is not
-					 ** determinable, so output nothing if the
-					 ** appropriate variables are not available.
-					 */
-					if (t->tm_isdst < 0)
-						continue;
-					if (t->tm_isdst == 0)
-#if USG_COMPAT
-						diff = -timezone;
-#else
-						continue;
-#endif
-					else
-#if ALTZONE
-						diff = -altzone;
-#else
-						continue;
-#endif
-#endif
+					diff = t->tm_gmtoff;
 					negative = diff < 0;
 					if (diff == 0) {
-#ifdef TM_ZONE
-						negative = t->TM_ZONE[0] == '-';
-#else
 						negative = t->tm_isdst < 0;
-#if HAVE_TZNAME
 						if (tzname[t->tm_isdst != 0][0]
 						    == '-')
 							negative = true;
-#endif
-#endif
 					}
 					if (negative) {
 						sign = "-";
@@ -659,7 +611,6 @@ static char *_fmt(const char *format, const struct dt_tm *t, char *pt,
 					    (diff % MINSPERHOUR);
 					pt = _conv(diff, "%04d", pt, ptlim);
 				}
-#endif
 				continue;
 			case '+':
 				pt = _fmt(Locale->date_fmt, t, pt, ptlim,
