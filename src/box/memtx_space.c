@@ -1165,6 +1165,14 @@ memtx_space_build_index(struct space *src_space, struct index *new_index,
 	struct iterator *it = index_create_iterator(pk, ITER_ALL, NULL, 0);
 	if (it == NULL)
 		return -1;
+	/*
+	 * If we insert a tuple during index being built, new tuple will or
+	 * will not be inserted in index depending on result of lexicographical
+	 * comparison with tuple which was inserted into new index last.
+	 * The problem is HASH index is unordered, so background
+	 * build will not work properly if primary key is HASH index.
+	 */
+	bool can_yield = pk->def->type != HASH;
 
 	if (txn_check_singlestatement(txn, "index build") != 0)
 		return -1;
@@ -1218,29 +1226,34 @@ memtx_space_build_index(struct space *src_space, struct index *new_index,
 		if (new_index->def->iid == 0)
 			tuple_ref(tuple);
 		/*
-		 * Remember the latest inserted tuple to
-		 * avoid processing yet to be added tuples
-		 * in on_replace triggers.
+		 * Let index be built in background if it is possible.
 		 */
-		state.cursor = tuple;
-		tuple_ref(state.cursor);
-		if (++count % MEMTX_DDL_YIELD_LOOPS == 0 &&
-		    memtx->state == MEMTX_OK)
-			fiber_sleep(0);
-		/*
-		 * Sleep after at least one tuple is inserted to test
-		 * on_replace triggers for index build.
-		 */
-		ERROR_INJECT_YIELD(ERRINJ_BUILD_INDEX_DELAY);
-		tuple_unref(state.cursor);
-		/*
-		 * The on_replace trigger may have failed
-		 * during the yield.
-		 */
-		if (state.rc != 0) {
-			rc = -1;
-			diag_move(&state.diag, diag_get());
-			break;
+		if (can_yield) {
+			/*
+			 * Remember the latest inserted tuple to
+			 * avoid processing yet to be added tuples
+			 * in on_replace triggers.
+			 */
+			state.cursor = tuple;
+			tuple_ref(state.cursor);
+			if (++count % MEMTX_DDL_YIELD_LOOPS == 0 &&
+			    memtx->state == MEMTX_OK)
+				fiber_sleep(0);
+			/*
+			 * Sleep after at least one tuple is inserted to test
+			 * on_replace triggers for index build.
+			 */
+			ERROR_INJECT_YIELD(ERRINJ_BUILD_INDEX_DELAY);
+			tuple_unref(state.cursor);
+			/*
+			 * The on_replace trigger may have failed
+			 * during the yield.
+			 */
+			if (state.rc != 0) {
+				rc = -1;
+				diag_move(&state.diag, diag_get());
+				break;
+			}
 		}
 	}
 	iterator_delete(it);
