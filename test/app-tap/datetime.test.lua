@@ -3,8 +3,13 @@
 local tap = require('tap')
 local test = tap.test("errno")
 local date = require('datetime')
+local ffi = require('ffi')
 
-test:plan(7)
+ffi.cdef [[
+    void tzset(void);
+]]
+
+test:plan(8)
 
 local function assert_raises(test, error_msg, func, ...)
     local ok, err = pcall(func, ...)
@@ -43,6 +48,104 @@ test:test("Datetime string formatting", function(test)
     test:is(t:format('%FT%T.%f%z'), '1970-01-01T00:00:00.000+0000', 'format #4')
     test:is(t:format('%FT%T.%4f%z'), '1970-01-01T00:00:00.0000+0000', 'format #5')
 end)
+
+test:test("Datetime string formatting detailed", function(test)
+    test:plan(79)
+    local T = date.new{ timestamp = 0.125 }
+    T:set{ tzoffset = 180 }
+    test:is(tostring(T), '1970-01-01T03:00:00.125+0300', 'tostring()')
+    -- %Z and %+ are local timezone dependent. To make sure that
+    -- test is deterministic we enforce timezone via TZ environment
+    -- manipulations and calling tzset()
+    os.setenv('TZ', 'GMT')
+    ffi.C.tzset()
+    local formats = {
+        { '%A',                         'Thursday' },
+        { '%a',                         'Thu' },
+        { '%B',                         'January' },
+        { '%b',                         'Jan' },
+        { '%h',                         'Jan' },
+        { '%C',                         '19' },
+        { '%c',                         'Thu Jan  1 03:00:00 1970' },
+        { '%D',                         '01/01/70' },
+        { '%m/%d/%y',                   '01/01/70' },
+        { '%d',                         '01' },
+        { '%Ec',                        'Thu Jan  1 03:00:00 1970' },
+        { '%EC',                        '19' },
+        { '%Ex',                        '01/01/70' },
+        { '%EX',                        '03:00:00' },
+        { '%Ey',                        '70' },
+        { '%EY',                        '1970' },
+        { '%Od',                        '01' },
+        { '%oe',                        'oe' },
+        { '%OH',                        '03' },
+        { '%OI',                        '03' },
+        { '%Om',                        '01' },
+        { '%OM',                        '00' },
+        { '%OS',                        '00' },
+        { '%Ou',                        '4' },
+        { '%OU',                        '00' },
+        { '%OV',                        '01' },
+        { '%Ow',                        '4' },
+        { '%OW',                        '00' },
+        { '%Oy',                        '70' },
+        { '%e',                         ' 1' },
+        { '%F',                         '1970-01-01' },
+        { '%Y-%m-%d',                   '1970-01-01' },
+        { '%H',                         '03' },
+        { '%I',                         '03' },
+        { '%j',                         '001' },
+        { '%k',                         ' 3' },
+        { '%l',                         ' 3' },
+        { '%M',                         '00' },
+        { '%m',                         '01' },
+        { '%n',                         '\n' },
+        { '%p',                         'AM' },
+        { '%R',                         '03:00' },
+        { '%H:%M',                      '03:00' },
+        { '%r',                         '03:00:00 AM' },
+        { '%I:%M:%S %p',                '03:00:00 AM' },
+        { '%S',                         '00' },
+        { '%s',                         '10800' },
+        { '%f',                         '125' },
+        { '%3f',                        '125' },
+        { '%6f',                        '125000' },
+        { '%6d',                        '6d' },
+        { '%3D',                        '3D' },
+        { '%T',                         '03:00:00' },
+        { '%H:%M:%S',                   '03:00:00' },
+        { '%t',                         '\t' },
+        { '%U',                         '00' },
+        { '%u',                         '4' },
+        { '%V',                         '01' },
+        { '%G',                         '1970' },
+        { '%g',                         '70' },
+        { '%v',                         ' 1-Jan-1970' },
+        { '%e-%b-%Y',                   ' 1-Jan-1970' },
+        { '%W',                         '00' },
+        { '%w',                         '4' },
+        { '%X',                         '03:00:00' },
+        { '%x',                         '01/01/70' },
+        { '%y',                         '70' },
+        { '%Y',                         '1970' },
+        { '%Z',                         'GMT' },
+        { '%z',                         '+0300' },
+        { '%+',                         'Thu Jan  1 03:00:00 GMT 1970' },
+        { '%%',                         '%' },
+        { '%Y-%m-%dT%H:%M:%S.%9f%z',    '1970-01-01T03:00:00.125000000+0300' },
+        { '%Y-%m-%dT%H:%M:%S.%f%z',     '1970-01-01T03:00:00.125+0300' },
+        { '%Y-%m-%dT%H:%M:%S.%f',       '1970-01-01T03:00:00.125' },
+        { '%FT%T.%f',                   '1970-01-01T03:00:00.125' },
+        { '%FT%T.%f%z',                 '1970-01-01T03:00:00.125+0300' },
+        { '%FT%T.%9f%z',                '1970-01-01T03:00:00.125000000+0300' },
+    }
+    for _, row in pairs(formats) do
+        local fmt, value = unpack(row)
+        test:is(T:format(fmt), value,
+                ('format %s, expected %s'):format(fmt, value))
+    end
+end)
+
 
 test:test("totable{}", function(test)
     test:plan(9)
