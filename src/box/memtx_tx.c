@@ -120,6 +120,18 @@ struct full_scan_item {
 };
 
 /**
+ * A structure storing arguments for creation of the `tx_read_tracker`.
+ * Fields are the arguments for delayed @a memtx_tx_track_read_slow call.
+ * @sa tx_read_tracker
+ * @sa memtx_tx_track_read_slow
+ */
+struct read_tracker_proxy {
+	struct rlist in_read_tracker_proxies;
+	struct space *space;
+	struct tuple *tuple;
+};
+
+/**
  * Helper structure for searching for point_hole_item in the hash table,
  * @sa point_hole_item_pool.
  */
@@ -213,6 +225,8 @@ struct tx_manager
 	struct rlist all_txs;
 	/** Accumulated number of GC steps that should be done. */
 	size_t must_do_gc_steps;
+	/** List of read_tracker_proxy items used to delay tracker creation. */
+	struct rlist read_tracker_proxy_list;
 };
 
 enum {
@@ -257,6 +271,7 @@ memtx_tx_manager_init()
 	rlist_create(&txm.all_txs);
 	txm.traverse_all_stories = &txm.all_stories;
 	txm.must_do_gc_steps = 0;
+	rlist_create(&txm.read_tracker_proxy_list);
 }
 
 void
@@ -921,6 +936,43 @@ memtx_tx_story_gc()
 	for (size_t i = 0; i < txm.must_do_gc_steps; i++)
 		memtx_tx_story_gc_step();
 	txm.must_do_gc_steps = 0;
+}
+
+static int
+memtx_tx_track_read_slow(struct txn *txn, struct space *space,
+			 struct tuple *tuple);
+
+/**
+ * Create trackers from their proxies for @a txn
+ */
+static int
+memtx_tx_flush_proxies(struct txn *txn)
+{
+	struct read_tracker_proxy *read_proxy, *tmp_read_proxy;
+	rlist_foreach_entry_safe(read_proxy, &txm.read_tracker_proxy_list,
+				 in_read_tracker_proxies, tmp_read_proxy) {
+		if (memtx_tx_track_read_slow(txn, read_proxy->space,
+					     read_proxy->tuple) != 0)
+			return -1;
+		rlist_del(&read_proxy->in_read_tracker_proxies);
+	}
+
+	return 0;
+}
+
+/**
+ * Procedure to be called on txn yield to fulfill all the delayed operations.
+ */
+int
+memtx_tx_on_yield(struct txn *txn)
+{
+	if (memtx_tx_manager_use_mvcc_engine) {
+		assert(txn != NULL);
+		if (memtx_tx_flush_proxies(txn) != 0)
+			return -1;
+	}
+
+	return 0;
 }
 
 /**
@@ -2015,6 +2067,12 @@ memtx_tx_on_index_delete(struct index *index)
 void
 memtx_tx_on_space_delete(struct space *space)
 {
+	struct read_tracker_proxy *read_proxy, *tmp_read_proxy;
+	rlist_foreach_entry_safe(read_proxy, &txm.read_tracker_proxy_list,
+				 in_read_tracker_proxies, tmp_read_proxy) {
+		if (read_proxy->space == space)
+			rlist_del(&read_proxy->in_read_tracker_proxies);
+	}
 	while (!rlist_empty(&space->memtx_stories)) {
 		struct memtx_story *story
 			= rlist_first_entry(&space->memtx_stories,
@@ -2113,6 +2171,46 @@ memtx_tx_track_read_story(struct txn *txn, struct space *space,
 	return memtx_tx_track_read_story_slow(txn, story, index_mask);
 }
 
+static int
+memtx_tx_track_read_slow(struct txn *txn, struct space *space,
+			 struct tuple *tuple)
+{
+	struct memtx_story *story = NULL;
+	if (tuple->is_dirty) {
+		story = memtx_tx_story_get(tuple);
+	} else {
+		story = memtx_tx_story_new(space, tuple);
+		if (story == NULL)
+			return -1;
+	}
+
+	// TODO: to add flag for the case where simple tracker allcation is necessary
+	return memtx_tx_track_read_story(txn, space, story, UINT64_MAX);
+}
+
+/**
+ * Allocate new read_tracker_proxy item for @a txn on its region.
+ */
+static int
+read_tracker_proxy_new(struct txn *txn, struct space *space,
+		       struct tuple *tuple)
+{
+	struct read_tracker_proxy *proxy = NULL;
+	proxy = region_alloc(&txn->region, sizeof(*proxy));
+	if (proxy == NULL) {
+		diag_set(OutOfMemory, sizeof(*proxy), "tx region",
+			 "read_tracker_proxy");
+		return -1;
+	}
+
+	proxy->space = space;
+	proxy->tuple = tuple;
+	rlist_add(&txm.read_tracker_proxy_list,
+		  &proxy->in_read_tracker_proxies);
+
+	return 0;
+}
+
 int
 memtx_tx_track_read(struct txn *txn, struct space *space, struct tuple *tuple)
 {
@@ -2125,17 +2223,14 @@ memtx_tx_track_read(struct txn *txn, struct space *space, struct tuple *tuple)
 	if (space->def->opts.is_ephemeral)
 		return 0;
 
-	struct memtx_story *story = NULL;
-	if (tuple->is_dirty) {
-		story = memtx_tx_story_get(tuple);
-	} else {
-		story = memtx_tx_story_new(space, tuple);
-		if (story == NULL)
-			return -1;
-	}
+	/*
+	 * Workaround for the case of detached txn
+	 * where the on_yield trigger won't be useful.
+	 */
+	if (in_txn() != txn)
+		return memtx_tx_track_read(txn, space, tuple);
 
-	// TODO: to add flag for the case where simple tracker allcation is necessary
-	return memtx_tx_track_read_story(txn, space, story, UINT64_MAX);
+	return read_tracker_proxy_new(txn, space, tuple);
 }
 
 /**
@@ -2417,6 +2512,8 @@ memtx_tx_clean_txn(struct txn *txn)
 					  in_full_scan_list);
 		memtx_tx_full_scan_item_delete(item);
 	}
+	/* Refresh tracker list for the next txn. */
+	rlist_del(&txm.read_tracker_proxy_list);
 }
 
 static uint32_t

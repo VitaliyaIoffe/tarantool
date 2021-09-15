@@ -183,6 +183,12 @@ void
 memtx_tx_manager_free();
 
 /**
+ * Fulfill delayed operations on yield moment (used by the on_yield trigger).
+ */
+int
+memtx_tx_on_yield(struct txn *txn);
+
+/**
  * Transaction providing DDL changes is disallowed to yield after
  * modifications of internal caches (i.e. after ALTER operation finishes).
  */
@@ -290,6 +296,7 @@ memtx_tx_tuple_clarify_slow(struct txn *txn, struct space *space,
 
 /**
  * Record in TX manager that a transaction @txn have read a @tuple in @space.
+ * If @a txn yields than @a tuple must be referenced until this moment.
  * @return 0 on success, -1 on memory error.
  */
 int
